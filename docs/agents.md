@@ -1,6 +1,6 @@
 # AgenticOrg agents
 
-RecoverRoute's two core jobs are also set up as governed agents on the Pine Labs AgenticOrg platform
+RecoverRoute's two core jobs run as governed agents on the Pine Labs AgenticOrg platform, and the app calls them directly
 (<https://agenticorg.hackathon.pinelabs.com/dashboard>, workspace **AirTribe**). Both run on LangGraph, are registered
 on Grantex with their own DID, and start in **shadow mode**: they observe and produce recommendations, and do nothing
 on their own until someone clicks **Promote**.
@@ -91,8 +91,46 @@ Kirana) needs 18 with 4 on the shelf selling 3/day; #1047 (City Mart Express) ne
 | Cost | ₹16,305 total; net premium −₹195 vs the original price | Yes (6×505 + 15×485 = 10,305; +6,000 warehouse) |
 | Governance | Self-reported 70% confidence → routed to human approval; nothing committed | As configured |
 
-## Connecting the agents to the app (not done yet)
+## How the app uses them
 
-The agents currently have no connectors, so they work only from what they are told in chat or in a run. To let them read
-live RecoverRoute data, expose the server's read endpoints (`GET /api/distributor/:id/view`) through an AgenticOrg
-connector or the platform's A2A/MCP integration. Keep the write endpoints behind the platform's approval step.
+The server calls AgenticOrg's run API (`server/src/agenticorg.ts`):
+
+```
+POST {AGENTICORG_BASE_URL}/api/v1/agents/{agent-uuid}/run
+Authorization: Bearer {AGENTICORG_API_KEY}
+{"action": "process", "inputs": {"task": "<live data + instructions>"}, "context": {"source": "recoverroute", ...}}
+→ {"run_id": "msg_…", "status": "completed" | "failed" | "hitl_triggered" | "budget_exceeded", "confidence": 0.7,
+   "output": {"raw_output": "<markdown>", "status": "completed"}, "hitl_trigger": "confidence 0.700 < floor 0.9",
+   "performance": {"total_latency_ms": 3248, "llm_tokens_used": 2883, "llm_cost_usd": 0.001081}, "error": null, ...}
+```
+
+The app stores `run_id`, `hitl_trigger`, latency and cost on each run and shows them in the UI.
+
+| Trigger | Agent | Task contents | What the app does with the result |
+|---|---|---|---|
+| Distributor clicks **Plan with AgenticOrg** (Inventory & allocation tab) | Stock Allocation & Alternate Sourcing | Warehouse stock; every order awaiting stock with retailer shelf, sales rate, days of cover and stockout time; ranked alternative suppliers with IDs; delayed orders that will run out. Asks for a trailing JSON plan | Shows the write-up. Parses and validates the JSON plan (known orders only, never more than needed or in stock, real supplier IDs). **Load into the table** puts the quantities in the allocation form for review; **Send supplier suggestions** sends them to retailers |
+| A disruption is reported (automatic), or **Run now** in the order drawer | Delivery Disruption Assistant | The order, disruption, original and revised ETA, stockout risk, warehouse stock, ranked alternatives | Shows the disruption card in the order drawer and notifies the distributor |
+
+- Runs execute in the background (`agent_runs` table) because they can take minutes; portals update over SSE.
+- `hitl_triggered` runs show as **Awaiting approval** with the platform's reason and a link to the AgenticOrg Approvals
+  page. Their allocations can still be loaded into the table as a draft (the distributor confirms there), but supplier
+  suggestions can't be sent to retailers until the run is approved in AgenticOrg.
+- An order holds one suggested supplier, so when the agent splits a shortfall across suppliers, its first pick is sent.
+- Errors (bad key, missing `agents:run` scope, rate limits, network) are stored on the run and shown in the UI.
+- Runs still in progress when the server restarts are marked failed on startup.
+- `server/test/agenticorg.test.ts` checks the integration against a fake AgenticOrg server.
+
+### Live check (24 Oct 2026)
+
+Run through the app against the real platform with the seed data:
+
+| Agent | Result | Time | Cost |
+|---|---|---|---|
+| Delivery Disruption Assistant (#1042, road closure) | Correct card: impact High, 7.9 cartons at 5/day ≈ 1.6 days of cover vs ≈ 2.3 days to delivery | 9.6 s | $0.0014 |
+| Stock Allocation & Alternate Sourcing | #1046 ← 12 cola, #1048 ← 10 detergent, #1047 ← 0 (same as the app's own plan); QuickStock for #1046, MetroMart for #1047, a split for delayed #1043. JSON plan parsed | 13.4 s | $0.0021 |
+
+Both runs came back `hitl_triggered`: the agents report 0.7 confidence against the 0.9 floor. Lower the confidence floor
+in AgenticOrg (agent → Config) if runs should complete without approval.
+
+Not yet done: polling AgenticOrg for the outcome of a held run (the run endpoint is the only one the `agents:run` key can call; run, task and approval lookups return 401),
+and giving the agents a connector so they can query RecoverRoute themselves instead of receiving data in the task.

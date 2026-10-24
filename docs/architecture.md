@@ -5,7 +5,8 @@ RecoverRoute is three pieces that share one domain model:
 ```
 frontend/ (React + Vite)  ──HTTP /api──▶  server/ (Node, no runtime deps)  ──▶  SQLite (server/data/)
         ▲                                   │   │
-        └──────── SSE /api/events ──────────┘   └──▶ OpenRouter (AI features, optional)
+        └──────── SSE /api/events ──────────┘   ├──▶ OpenRouter (AI features, optional)
+                                                └──▶ Pine Labs AgenticOrg (governed agents, optional)
 
 shared/ — types + pure domain logic, imported by both frontend and server
 ```
@@ -34,6 +35,7 @@ shared/ — types + pure domain logic, imported by both frontend and server
 | `src/commands.ts` | Every state change. Validates input and ownership, applies domain rules, writes timeline events and notifications |
 | `src/views.ts` | `portalView(role, id)`: what each portal may see; `accounts()` for the landing page |
 | `src/ai.ts` | OpenRouter client and the three AI features, each with a rule-based fallback |
+| `src/agenticorg.ts` | AgenticOrg run client, task builders, plan parsing/validation, background runs (see [agents.md](agents.md)) |
 | `src/index.ts` | Router, JSON body parsing, SSE, static hosting of `frontend/dist` |
 
 ### Request flow for a change
@@ -52,7 +54,7 @@ means the order is in the wrong state.
 `products`, `suppliers` (distributors and alternative wholesalers, with `delivery_hours`), `inventory` (supplier ×
 product: qty, price), `retailers`, `retailer_distributors`, `retailer_stock` (qty at last count, average daily sales,
 `counted_at`), `orders` (`disruption`, `request` and `partial` are JSON columns), `order_events`, `notifications`,
-`messages`.
+`messages`, `agent_runs` (AgenticOrg calls: kind, status, confidence, output, validated plan, error).
 
 **Shelf stock is estimated, not stored live.** `loadStock()` returns
 `max(0, qty − avg_daily_sales × days since counted_at)`. A retailer's "Update count" resets the count; a delivery adds the
@@ -100,6 +102,8 @@ should point the user at the right screen instead.
 - `OrderDetail.tsx`: the order drawer, with role-specific actions, AI disruption drafting, AI recovery advice, the UPI QR
   popup, order chat and the timeline.
 - `Assistant.tsx`: the floating chat panel.
+- `Agents.tsx`: AgenticOrg run cards, the allocation-plan panel, the disruption card in the drawer, the Agents tab.
+- `Markdown.tsx`: renders agent output (tables, lists, headings) as React elements, never as HTML.
 
 In development Vite proxies `/api` to `localhost:8787` and is allowed to serve `../shared` (`vite.config.ts`).
 

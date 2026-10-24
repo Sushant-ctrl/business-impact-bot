@@ -17,11 +17,12 @@ import {
 } from '../../shared/logic.ts';
 import { REASON_LABELS } from '../../shared/types.ts';
 import type { InventoryItem, Order } from '../../shared/types.ts';
+import { AgentsTab, AllocationAgentPanel } from './Agents.tsx';
 import { usePortal } from './api.tsx';
 import { DisruptionForm } from './OrderDetail.tsx';
 import { Badge, Metric, Notifications, Tabs } from './ui.tsx';
 
-export type DistributorTab = 'overview' | 'allocation' | 'retailers';
+export type DistributorTab = 'overview' | 'allocation' | 'retailers' | 'agents';
 type Filter = 'all' | 'attention' | 'delayed' | 'COD' | 'Prepaid';
 
 export function DistributorDashboard({
@@ -43,6 +44,7 @@ export function DistributorDashboard({
   const awaiting = orders.filter(awaitingResolution);
   const totalUnits = dist.inventory.reduce((a, i) => a + i.qty, 0);
   const openValue = orders.filter(isOpen).reduce((a, o) => a + o.quantity * o.unitPrice, 0);
+  const heldRuns = state.agentRuns.filter((r) => r.status === 'hitl_triggered').length;
 
   return (
     <div className="layout">
@@ -59,6 +61,7 @@ export function DistributorDashboard({
               ['overview', 'Orders'],
               ['allocation', <>Inventory & allocation {plan.length > 0 && <span className="count">{plan.length}</span>}</>],
               ['retailers', <>Retailers {atRisk.size > 0 && <span className="count">{atRisk.size}</span>}</>],
+              ['agents', <>✦ Agents {heldRuns > 0 && <span className="count">{heldRuns}</span>}</>],
             ]}
           />
         </div>
@@ -74,6 +77,7 @@ export function DistributorDashboard({
         {tab === 'overview' && <Overview orders={orders} openOrder={openOrder} />}
         {tab === 'allocation' && <Allocation openOrder={openOrder} />}
         {tab === 'retailers' && <Retailers openOrder={openOrder} />}
+        {tab === 'agents' && <AgentsTab openOrder={openOrder} />}
       </div>
 
       <div className="side">
@@ -331,13 +335,20 @@ function Allocation({ openOrder }: { openOrder: (id: string) => void }) {
   const recommended = () => Object.fromEntries(plan.map((l) => [l.order.id, String(l.suggested)]));
   const [edits, setEdits] = useState<Record<string, string>>(recommended);
   const [done, setDone] = useState(false);
+  const [fromAgent, setFromAgent] = useState(false);
   // When the plan changes (allocation confirmed, inventory moved elsewhere), start again from the recommendation.
   const planSig = JSON.stringify(plan.map((l) => [l.order.id, l.need, l.suggested]));
   const [seenSig, setSeenSig] = useState(planSig);
   if (seenSig !== planSig) {
     setSeenSig(planSig);
     setEdits(recommended());
+    setFromAgent(false);
   }
+  const loadAgentPlan = (qty: Record<string, number>) => {
+    setEdits(Object.fromEntries(plan.map((l) => [l.order.id, String(qty[l.order.id] ?? 0)])));
+    setFromAgent(true);
+    setDone(false);
+  };
 
   const qtyOf = (id: string) => Number(edits[id] ?? 0);
   const errors: string[] = [];
@@ -366,6 +377,8 @@ function Allocation({ openOrder }: { openOrder: (id: string) => void }) {
 
   return (
     <>
+      <AllocationAgentPanel onLoad={loadAgentPlan} hasWork={plan.length > 0 || state.orders.some((o) => o.status === 'delayed')} />
+
       <div className="card">
         <div className="card-head">
           <h3>Warehouse inventory</h3>
@@ -391,7 +404,7 @@ function Allocation({ openOrder }: { openOrder: (id: string) => void }) {
               that order without exceeding what's in the warehouse.
             </p>
           </div>
-          {isManual && <Badge tone="warning">Manually adjusted</Badge>}
+          {fromAgent ? <Badge tone="info">✦ Loaded from AgenticOrg plan · review, then confirm</Badge> : isManual && <Badge tone="warning">Manually adjusted</Badge>}
         </div>
         {done && plan.length === 0 && <div className="callout callout-success">Allocation confirmed. All pending orders have stock.</div>}
         {done && plan.length > 0 && (
@@ -491,11 +504,18 @@ function Allocation({ openOrder }: { openOrder: (id: string) => void }) {
               </ul>
             )}
             <div className="row-end">
-              <button className="btn" onClick={() => setEdits(recommended())} disabled={!isManual}>
+              <button
+                className="btn"
+                onClick={() => {
+                  setEdits(recommended());
+                  setFromAgent(false);
+                }}
+                disabled={!isManual}
+              >
                 Reset to recommendation
               </button>
               <button className="btn btn-primary" onClick={confirm} disabled={errors.length > 0 || total === 0}>
-                {isManual ? 'Confirm manual allocation' : 'Approve recommended allocation'} ({total} units)
+                {fromAgent ? 'Approve AgenticOrg allocation' : isManual ? 'Confirm manual allocation' : 'Approve recommended allocation'} ({total} units)
               </button>
             </div>
           </>

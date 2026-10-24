@@ -133,6 +133,42 @@ export interface World {
   orders: Order[];
 }
 
+export type AgentKind = 'allocation' | 'disruption';
+export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'hitl_triggered' | 'budget_exceeded';
+
+/** A structured plan the allocation agent returns alongside its write-up. Validated against live data on the server. */
+export interface AgentPlan {
+  allocations: { orderId: string; qty: number }[];
+  sourcing: { orderId: string; supplierId: string; qty: number }[];
+}
+
+/** One call to an AgenticOrg agent. */
+export interface AgentRun {
+  id: string;
+  kind: AgentKind;
+  agentId: string;
+  distributorId: string;
+  orderId?: string;
+  status: AgentRunStatus;
+  confidence?: number;
+  output?: string;
+  plan?: AgentPlan;
+  error?: string;
+  createdAt: string;
+  finishedAt?: string;
+  sourcingSentAt?: string;
+  platformRunId?: string; // AgenticOrg's run_id
+  hitlReason?: string; // why AgenticOrg held the run, e.g. "confidence 0.700 < floor 0.9"
+  latencyMs?: number;
+  costUsd?: number;
+}
+
+export interface AgenticOrgStatus {
+  enabled: boolean;
+  dashboardUrl: string;
+  agents: Record<AgentKind, { id: string; name: string }>;
+}
+
 /** What a portal receives: the world scoped to one distributor or retailer. */
 export interface PortalView extends World {
   role: Role;
@@ -141,6 +177,8 @@ export interface PortalView extends World {
   notifications: Notification[];
   messages: Message[];
   ai: { enabled: boolean; model: string };
+  agenticorg: AgenticOrgStatus;
+  agentRuns: AgentRun[]; // distributor portal only
 }
 
 export interface Accounts {

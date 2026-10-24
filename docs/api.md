@@ -13,7 +13,7 @@ Errors return `{ "error": "message" }` with status 400 (invalid input), 404 (not
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/health` | `{ ok, ai: { enabled, model } }` |
+| GET | `/health` | `{ ok, ai: { enabled, model }, agenticorg: { enabled, dashboardUrl, agents } }` |
 | GET | `/accounts` | Distributors and retailers for the landing page |
 | POST | `/reset` | Reseed the demo data (shifted to the current hour) |
 | GET | `/events` | Server-Sent Events: `event: change` after every command |
@@ -32,6 +32,13 @@ Errors return `{ "error": "message" }` with status 400 (invalid input), 404 (not
 | POST | `/orders/:orderId/advance` | `to`: `in_transit` \| `delivered` | Dispatch, or deliver (adds stock to the retailer's shelf) |
 | POST | `/orders/:orderId/reject` | `reason` | Reject a not-yet-dispatched order; stock returned |
 | PUT | `/inventory/:productId` | `qty?`, `price?` | Restock, reprice, or start stocking a product |
+
+| POST | `/agent-runs/allocation` | — | Start an AgenticOrg allocation run (background). `result` is the run id. 503 if not configured |
+| POST | `/orders/:orderId/agent-runs/disruption` | — | Start a Disruption Assistant run for an order with an active disruption |
+| POST | `/agent-runs/:runId/send-sourcing` | — | Send a completed run's supplier recommendations to the retailers (once) |
+
+Reporting a disruption also starts a Disruption Assistant run automatically when AgenticOrg is configured. Runs appear
+in the distributor's `view.agentRuns` and update over SSE.
 
 `reason` is one of `road_closure`, `weather`, `vehicle_breakdown`, `warehouse_delay`, `other`.
 

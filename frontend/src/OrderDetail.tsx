@@ -19,6 +19,7 @@ import {
 } from '../../shared/logic.ts';
 import { REASON_LABELS } from '../../shared/types.ts';
 import type { DisruptionReason, Order, RequestType, Supplier } from '../../shared/types.ts';
+import { DisruptionAgentSection } from './Agents.tsx';
 import { usePortal } from './api.tsx';
 import { Badge, Modal, RiskPanel, SupplierTable, Thread, Timeline } from './ui.tsx';
 
@@ -285,6 +286,8 @@ export function OrderDetail({ orderId, onClose, onGoToAllocation }: { orderId: s
           ) : (
             <RetailerActions order={order} />
           )}
+
+          {role === 'distributor' && <DisruptionAgentSection orderId={order.id} hasDisruption={Boolean(order.disruption) && isOpen(order)} />}
 
           <section>
             <h3>Messages</h3>

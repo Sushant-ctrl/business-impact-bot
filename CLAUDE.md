@@ -23,11 +23,12 @@ Run both type-checks and `npm test` before committing.
 - `shared/`: domain types (`types.ts`) and pure logic (`logic.ts`). Imported by both sides, so it must stay free of I/O,
   DOM and Node APIs.
 - `server/src/`: `db.ts` (schema, load/save), `commands.ts` (all mutations), `views.ts` (per-portal scoping), `ai.ts`
-  (OpenRouter + fallbacks), `seed.ts`, `index.ts` (routes, SSE, static files).
+  (OpenRouter + fallbacks), `agenticorg.ts` (Pine Labs AgenticOrg agents), `seed.ts`, `index.ts` (routes, SSE, static
+  files).
 - `frontend/src/`: `api.tsx` (portal state, `act`/`ask`), `App.tsx` (router, landing, shell), `Distributor.tsx`,
-  `Retailer.tsx`, `OrderDetail.tsx`, `Assistant.tsx`, `ui.tsx`.
+  `Retailer.tsx`, `OrderDetail.tsx`, `Assistant.tsx`, `Agents.tsx` (AgenticOrg UI), `Markdown.tsx`, `ui.tsx`.
 - `backend/`: an unrelated earlier Python scaffold. Don't modify it unless asked.
-- `docs/agents.md`: the two AgenticOrg platform agents (they live on the platform, not in this repo).
+- `docs/agents.md`: the two AgenticOrg platform agents and how the app calls them.
 
 ## Conventions and gotchas
 
@@ -55,9 +56,14 @@ Run both type-checks and `npm test` before committing.
   data.
 - Seed data in `seed.ts` uses fixed timestamps around `2026-10-29T09:00` that are shifted to the current hour. Add new
   seed records the same way.
-- Secrets: `OPENROUTER_API_KEY` lives only in `server/.env` (git-ignored). Never put it in frontend code or commit it.
+- AgenticOrg agents only recommend. Never apply an agent's output directly: validate it against live data
+  (`extractPlan`), then route it through the existing human steps (the allocation table, a click to send suggestions).
+  Runs are asynchronous: insert an `agent_runs` row, do the HTTP call in the background, then `broadcast()`.
+- Secrets: `OPENROUTER_API_KEY` and `AGENTICORG_API_KEY` live only in `server/.env`
+  (git-ignored). Never put them in frontend code or commit them.
 
 ## Tests
 
 `server/test/flows.test.ts` points `DATABASE_PATH` at a temp file, reseeds before each test, and calls commands
-directly. Add a test there when you add or change a command, especially for stock movements and validation.
+directly. `server/test/agenticorg.test.ts` runs the AgenticOrg integration against a local fake server. Add a test
+when you add or change a command, especially for stock movements and validation.

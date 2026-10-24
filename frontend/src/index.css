@@ -1158,3 +1158,91 @@ input.qty {
   margin: 0;
   line-height: 1.5;
 }
+
+/* ---- AgenticOrg agents */
+.agent-panel {
+  border-color: #d9d1fb;
+  background: linear-gradient(180deg, #f8f6ff, var(--surface) 120px);
+}
+.agent-run {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+}
+.agent-run-running {
+  border-color: #b9c8f8;
+}
+.agent-run-hitl_triggered {
+  border-color: #f0c98a;
+}
+.agent-run-failed,
+.agent-run-budget_exceeded {
+  border-color: #f2b8b2;
+}
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.agent-history {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.agent-history-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.agent-history-item > .btn-link {
+  align-self: flex-start;
+  padding: 0;
+}
+
+/* ---- Agent markdown output */
+.md {
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.md p {
+  margin: 6px 0;
+}
+.md-h {
+  font-weight: 600;
+  margin: 12px 0 4px;
+}
+.md-h1,
+.md-h2 {
+  font-size: 15px;
+}
+.md-h3,
+.md-h4 {
+  font-size: 13.5px;
+}
+.md-list {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+.md-table th,
+.md-table td {
+  font-size: 12.5px;
+  padding: 6px 8px;
+}
+.md code {
+  background: var(--neutral-soft);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+.md pre {
+  background: var(--neutral-soft);
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow: auto;
+  font-size: 12px;
+}

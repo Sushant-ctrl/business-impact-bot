@@ -6,9 +6,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, normalize } from 'node:path';
 import type { Role } from '../../shared/types.ts';
 import { aiStatus, assistantChat, parseDisruption, recoveryAdvice } from './ai.ts';
+import { agenticorgStatus, sendSourcingSuggestions, startAllocationRun, startDisruptionRun } from './agenticorg.ts';
 import * as cmd from './commands.ts';
 import { HttpError } from './commands.ts';
-import { isEmpty, tx } from './db.ts';
+import { failInterruptedRuns, isEmpty, tx } from './db.ts';
+import { nowIso } from '../../shared/logic.ts';
 import { seed } from './seed.ts';
 import { accounts, portalView } from './views.ts';
 
@@ -40,7 +42,7 @@ function mutate(role: Role, partyId: string, fn: () => unknown) {
 const D = '/api/distributor/:id';
 const R = '/api/retailer/:id';
 
-route('GET', '/api/health', () => ({ ok: true, ai: aiStatus() }));
+route('GET', '/api/health', () => ({ ok: true, ai: aiStatus(), agenticorg: agenticorgStatus() }));
 route('GET', '/api/accounts', () => accounts());
 route('POST', '/api/reset', () => {
   seed();
@@ -51,7 +53,18 @@ route('GET', `${D}/view`, (p) => portalView('distributor', p.id));
 route('GET', `${R}/view`, (p) => portalView('retailer', p.id));
 
 // Distributor commands
-route('POST', `${D}/orders/:orderId/disruption`, (p, b) => mutate('distributor', p.id, () => cmd.reportDisruption(p.id, p.orderId, b)));
+route('POST', `${D}/orders/:orderId/disruption`, (p, b) => {
+  mutate('distributor', p.id, () => cmd.reportDisruption(p.id, p.orderId, b));
+  // Hand the new disruption to the AgenticOrg Disruption Assistant; its card arrives later over SSE.
+  if (agenticorgStatus().enabled) {
+    try {
+      startDisruptionRun(p.id, p.orderId, broadcast);
+    } catch (e) {
+      console.warn('[agenticorg] could not start disruption run:', (e as Error).message);
+    }
+  }
+  return { result: null, view: portalView('distributor', p.id) };
+});
 route('POST', `${D}/orders/:orderId/eta`, (p, b) => mutate('distributor', p.id, () => cmd.updateEta(p.id, p.orderId, b)));
 route('POST', `${D}/allocations`, (p, b) => mutate('distributor', p.id, () => cmd.confirmAllocation(p.id, b)));
 route('POST', `${D}/orders/:orderId/suggest`, (p, b) => mutate('distributor', p.id, () => cmd.suggestSupplier(p.id, p.orderId, b)));
@@ -60,6 +73,16 @@ route('POST', `${D}/orders/:orderId/respond`, (p, b) => mutate('distributor', p.
 route('POST', `${D}/orders/:orderId/advance`, (p, b) => mutate('distributor', p.id, () => cmd.advanceOrder(p.id, p.orderId, b)));
 route('POST', `${D}/orders/:orderId/reject`, (p, b) => mutate('distributor', p.id, () => cmd.rejectOrder(p.id, p.orderId, b)));
 route('PUT', `${D}/inventory/:productId`, (p, b) => mutate('distributor', p.id, () => cmd.updateInventory(p.id, p.productId, b)));
+
+// AgenticOrg agents (distributor)
+function startRun(id: string, start: () => string) {
+  const runId = start();
+  broadcast();
+  return { result: runId, view: portalView('distributor', id) };
+}
+route('POST', `${D}/agent-runs/allocation`, (p) => startRun(p.id, () => startAllocationRun(p.id, broadcast)));
+route('POST', `${D}/orders/:orderId/agent-runs/disruption`, (p) => startRun(p.id, () => startDisruptionRun(p.id, p.orderId, broadcast)));
+route('POST', `${D}/agent-runs/:runId/send-sourcing`, (p) => mutate('distributor', p.id, () => sendSourcingSuggestions(p.id, p.runId)));
 
 // Retailer commands
 route('POST', `${R}/orders`, (p, b) => mutate('retailer', p.id, () => cmd.placeOrder(p.id, b)));
@@ -157,6 +180,7 @@ const server = createServer(async (req, res) => {
   }
 });
 
+failInterruptedRuns(nowIso());
 if (isEmpty()) {
   console.log('Seeding demo data…');
   seed();
@@ -167,4 +191,5 @@ server.listen(port, () => {
   const ai = aiStatus();
   console.log(`RecoverRoute API on http://localhost:${port}`);
   console.log(ai.enabled ? `AI: OpenRouter · ${ai.model}` : 'AI: disabled (set OPENROUTER_API_KEY in server/.env) — using rule-based fallbacks');
+  console.log(agenticorgStatus().enabled ? 'AgenticOrg: connected' : 'AgenticOrg: disabled (set AGENTICORG_API_KEY in server/.env)');
 });

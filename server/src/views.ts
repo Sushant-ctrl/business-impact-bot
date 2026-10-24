@@ -1,8 +1,9 @@
 // Read models: what each portal is allowed to see.
 import type { Accounts, PortalView, Role } from '../../shared/types.ts';
 import { aiStatus } from './ai.ts';
+import { agenticorgStatus } from './agenticorg.ts';
 import { HttpError } from './commands.ts';
-import { loadMessages, loadNotifications, loadWorld } from './db.ts';
+import { loadAgentRuns, loadMessages, loadNotifications, loadWorld } from './db.ts';
 
 export function portalView(role: Role, partyId: string): PortalView {
   const w = loadWorld();
@@ -33,6 +34,8 @@ export function portalView(role: Role, partyId: string): PortalView {
     notifications: loadNotifications(role, partyId),
     messages: loadMessages(orders.map((o) => o.id)),
     ai: aiStatus(),
+    agenticorg: agenticorgStatus(),
+    agentRuns: role === 'distributor' ? loadAgentRuns(partyId) : [],
   };
 }
 

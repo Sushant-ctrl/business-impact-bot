@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { SQLInputValue } from 'node:sqlite';
 import { daysBetween, nowIso } from '../../shared/logic.ts';
 import type {
+  AgentRun,
   InventoryItem,
   Message,
   Notification,
@@ -65,7 +66,24 @@ CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL REFERENCES orders(id), role TEXT NOT NULL,
   body TEXT NOT NULL, at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, agent_id TEXT NOT NULL,
+  distributor_id TEXT NOT NULL REFERENCES suppliers(id), order_id INTEGER REFERENCES orders(id), status TEXT NOT NULL,
+  confidence REAL, output TEXT, plan TEXT, error TEXT, created_at TEXT NOT NULL, finished_at TEXT, sourcing_sent_at TEXT
+);
+CREATE INDEX IF NOT EXISTS agent_runs_distributor ON agent_runs(distributor_id);
 `);
+
+// Columns added after agent_runs first shipped; add them to existing databases.
+for (const [col, type] of [
+  ['platform_run_id', 'TEXT'],
+  ['hitl_reason', 'TEXT'],
+  ['latency_ms', 'INTEGER'],
+  ['cost_usd', 'REAL'],
+]) {
+  const cols = db.prepare('PRAGMA table_info(agent_runs)').all() as { name: string }[];
+  if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE agent_runs ADD COLUMN ${col} ${type}`);
+}
 
 type Row = Record<string, SQLInputValue>;
 const all = (sql: string, ...params: SQLInputValue[]) => db.prepare(sql).all(...params) as Row[];
@@ -90,7 +108,7 @@ export const isEmpty = () => all('SELECT 1 FROM suppliers LIMIT 1').length === 0
 
 export function clearAll() {
   db.exec(`
-    DELETE FROM messages; DELETE FROM notifications; DELETE FROM order_events; DELETE FROM orders;
+    DELETE FROM agent_runs; DELETE FROM messages; DELETE FROM notifications; DELETE FROM order_events; DELETE FROM orders;
     DELETE FROM retailer_stock; DELETE FROM retailer_distributors; DELETE FROM retailers;
     DELETE FROM inventory; DELETE FROM suppliers; DELETE FROM products;
     DELETE FROM sqlite_sequence;
@@ -329,5 +347,71 @@ export function loadMessages(orderIds: string[]): Message[] {
     role: String(r.role) as Role,
     body: String(r.body),
     at: String(r.at),
+  }));
+}
+
+// ---- AgenticOrg agent runs
+
+export function insertAgentRun(r: Pick<AgentRun, 'kind' | 'agentId' | 'distributorId' | 'orderId' | 'createdAt'>): string {
+  const res = run(
+    `INSERT INTO agent_runs (kind, agent_id, distributor_id, order_id, status, created_at) VALUES (?, ?, ?, ?, 'running', ?)`,
+    r.kind,
+    r.agentId,
+    r.distributorId,
+    r.orderId ? Number(r.orderId) : null,
+    r.createdAt,
+  );
+  return String(res.lastInsertRowid);
+}
+
+export function finishAgentRun(
+  id: string,
+  r: Pick<AgentRun, 'status' | 'confidence' | 'output' | 'plan' | 'error' | 'finishedAt' | 'platformRunId' | 'hitlReason' | 'latencyMs' | 'costUsd'>,
+) {
+  run(
+    `UPDATE agent_runs SET status = ?, confidence = ?, output = ?, plan = ?, error = ?, finished_at = ?, platform_run_id = ?,
+       hitl_reason = ?, latency_ms = ?, cost_usd = ? WHERE id = ?`,
+    r.status,
+    r.confidence ?? null,
+    r.output ?? null,
+    r.plan ? JSON.stringify(r.plan) : null,
+    r.error ?? null,
+    r.finishedAt ?? null,
+    r.platformRunId ?? null,
+    r.hitlReason ?? null,
+    r.latencyMs ?? null,
+    r.costUsd ?? null,
+    Number(id),
+  );
+}
+
+export function markSourcingSent(id: string, at: string) {
+  run('UPDATE agent_runs SET sourcing_sent_at = ? WHERE id = ?', at, Number(id));
+}
+
+/** Runs left in `running` by a server restart can never finish. */
+export function failInterruptedRuns(at: string) {
+  run(`UPDATE agent_runs SET status = 'failed', error = 'Interrupted by a server restart', finished_at = ? WHERE status = 'running'`, at);
+}
+
+export function loadAgentRuns(distributorId: string): AgentRun[] {
+  return all('SELECT * FROM agent_runs WHERE distributor_id = ? ORDER BY id DESC LIMIT 50', distributorId).map((r) => ({
+    id: String(r.id),
+    kind: String(r.kind) as AgentRun['kind'],
+    agentId: String(r.agent_id),
+    distributorId: String(r.distributor_id),
+    orderId: str(r.order_id),
+    status: String(r.status) as AgentRun['status'],
+    confidence: r.confidence == null ? undefined : Number(r.confidence),
+    output: str(r.output),
+    plan: json(r.plan),
+    error: str(r.error),
+    createdAt: String(r.created_at),
+    finishedAt: str(r.finished_at),
+    sourcingSentAt: str(r.sourcing_sent_at),
+    platformRunId: str(r.platform_run_id),
+    hitlReason: str(r.hitl_reason),
+    latencyMs: r.latency_ms == null ? undefined : Number(r.latency_ms),
+    costUsd: r.cost_usd == null ? undefined : Number(r.cost_usd),
   }));
 }
