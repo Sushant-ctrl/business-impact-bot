@@ -1,393 +1,208 @@
-"""Mock data for local development and demos.
+"""Seed a synthetic hill-region network of trusted stockists and retailers.
 
-Builds a small Pune FMCG network (distributors -> stockists -> sub-stockist -> retailers) with ~180 days of
-delivered order history and a hand-picked set of open orders that exercise every risk factor. All dates are
-relative to `as_of` (today by default), so the scenario stays meaningful whenever the data is re-seeded.
+Run after `alembic upgrade head`. Wipes existing rows. Deterministic (fixed random seed).
 
-    uv run python -m scripts.seed           # create tables and seed (refuses if data already exists)
-    uv run python -m scripts.seed --reset   # drop everything first
+    uv run python -m scripts.seed
 """
 
-import argparse
 import random
-from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import inspect
 
 from app.clock import today
 from app.db import Base, SessionLocal, engine
 from app.models import (
-    Alert,
-    AlertType,
+    Disruption,
+    DisruptionCause,
     Inventory,
     Order,
+    OrderDisruption,
     OrderEvent,
     OrderLine,
     OrderStatus,
     Party,
     PartyRole,
+    PaymentMode,
     Product,
-    SupplyLink,
+    ServiceArea,
 )
-from app.services.risk import in_peak_period, open_orders, score_orders
 
-HISTORY_DAYS = 180
+rng = random.Random(42)
+
+# Pincodes laid out along a valley road; distance along the road drives normal delivery days.
+AREAS = {
+    "248001": "Clock Tower",
+    "248002": "Rajpur",
+    "248003": "Mussoorie Rd",
+    "248005": "Prem Nagar",
+    "248007": "Raipur",
+    "248009": "Sahastradhara",
+    "248121": "Doiwala",
+    "248140": "Rishikesh Rd",
+    "248179": "Kempty",
+    "248195": "Vikasnagar",
+}
+AREA_LIST = list(AREAS)
+
+STOCKISTS = [  # name, home pincode index, served pincode indexes
+    ("Doon Valley Traders", 0, [0, 1, 2, 3, 4]),
+    ("Himalaya Distributors", 2, [1, 2, 8, 3]),
+    ("Ganga Wholesale", 7, [6, 7, 4, 5]),
+    ("Shivalik Supplies", 4, [3, 4, 5, 6, 0]),
+    ("Mountain Mart Stockist", 8, [8, 2, 9, 1]),
+    ("Yamuna Agencies", 9, [9, 3, 0, 8]),
+]
 
 PRODUCTS = [
-    ("COLA24", "Fizz Cola 24×300ml", "carton"),
-    ("MANGO12", "Sunny Mango Juice 12×1L", "carton"),
-    ("CHIPS48", "Crunchy Salted Chips 48-pack", "case"),
-    ("DET12", "BrightWash Detergent 1kg ×12", "case"),
-    ("ATTA10", "GoldHarvest Atta 10kg", "bag"),
-]
-ALL_SKUS = [sku for sku, _, _ in PRODUCTS]
-
-# key, name, role, region, phone
-PARTIES = [
-    ("apex", "Apex Distribution", PartyRole.distributor, "Pune East", "+91 98220 10001"),
-    ("horizon", "Horizon Traders", PartyRole.distributor, "Pune West", "+91 98220 10002"),
-    ("freshlink", "FreshLink Wholesale", PartyRole.distributor, "Hadapsar", "+91 98220 10003"),
-    ("metromart", "MetroMart Cash & Carry", PartyRole.distributor, "Chakan", "+91 98220 10004"),
-    ("ganesh", "Shree Ganesh Stockists", PartyRole.stockist, "Hadapsar", "+91 98500 20001"),
-    ("laxmi", "Laxmi Agencies", PartyRole.stockist, "Kothrud", "+91 98500 20002"),
-    ("omsai", "Om Sai Sub-Stockist", PartyRole.sub_stockist, "Wagholi", "+91 98500 30001"),
-    ("sharma", "Sharma General Store", PartyRole.retailer, "Viman Nagar", "+91 99700 40001"),
-    ("patel", "Patel Kirana", PartyRole.retailer, "Kharadi", "+91 99700 40002"),
-    ("citymart", "City Mart Express", PartyRole.retailer, "Baner", "+91 99700 40003"),
-    ("greenbasket", "Green Basket Supermarket", PartyRole.retailer, "Aundh", "+91 99700 40004"),
-    ("balaji", "New Balaji Mart", PartyRole.retailer, "Wakad", "+91 99700 40005"),
+    ("ATTA-10", "Wheat flour 10kg", "bag"), ("RICE-25", "Basmati rice 25kg", "bag"),
+    ("OIL-1L", "Mustard oil 1L", "bottle"), ("SUGAR-5", "Sugar 5kg", "bag"),
+    ("SALT-1", "Iodised salt 1kg", "pack"), ("DAL-1", "Toor dal 1kg", "pack"),
+    ("TEA-500", "Tea 500g", "pack"), ("MILK-PWD", "Milk powder 1kg", "pack"),
+    ("SOAP-4", "Bath soap 4-pack", "pack"), ("DETG-1", "Detergent 1kg", "pack"),
+    ("BISC-BOX", "Biscuits carton", "carton"), ("NOOD-BOX", "Instant noodles carton", "carton"),
+    ("SPICE-MIX", "Garam masala 100g", "pack"), ("GHEE-1L", "Ghee 1L", "tin"),
+    ("WATER-12", "Bottled water 12-pack", "case"),
 ]
 
-
-@dataclass(frozen=True)
-class Reliability:
-    on_time: float  # probability an order lands on or before the promised date
-    max_delay: int  # worst-case days late
-
-
-RELIABILITY = {
-    "apex": Reliability(0.88, 3),
-    "horizon": Reliability(0.55, 5),
-    "freshlink": Reliability(0.95, 2),
-    "metromart": Reliability(0.75, 4),
-    "ganesh": Reliability(0.82, 3),
-    "laxmi": Reliability(0.65, 4),
-    "omsai": Reliability(0.72, 3),
-}
-
-# buyer, supplier, lead days, price multiplier, skus (None = all). The first link per buyer is its primary source.
-LINKS = [
-    ("ganesh", "apex", 2, 1.00, None),
-    ("ganesh", "horizon", 3, 1.03, None),
-    ("ganesh", "freshlink", 1, 1.12, ["COLA24", "MANGO12", "CHIPS48"]),
-    ("laxmi", "horizon", 3, 1.00, None),
-    ("laxmi", "apex", 2, 1.02, None),
-    ("laxmi", "metromart", 4, 0.95, None),
-    ("omsai", "ganesh", 1, 1.00, None),
-    ("omsai", "laxmi", 2, 1.02, None),
-    ("sharma", "ganesh", 1, 1.00, None),
-    ("sharma", "laxmi", 2, 1.03, None),
-    ("patel", "ganesh", 1, 1.00, None),
-    ("patel", "omsai", 1, 1.04, ["COLA24", "CHIPS48", "DET12"]),
-    ("citymart", "laxmi", 1, 1.00, None),
-    ("citymart", "ganesh", 2, 1.02, None),
-    ("greenbasket", "laxmi", 1, 1.00, None),
-    ("greenbasket", "ganesh", 2, 1.03, None),
-    ("balaji", "laxmi", 1, 1.00, None),
-    ("balaji", "omsai", 1, 1.04, None),
+RETAILER_NAMES = [
+    "Sharma Kirana", "Negi General Store", "Rawat Provisions", "Bisht Mart", "Gupta Stores",
+    "Pant Bazaar", "Joshi Traders", "Thapa Daily Needs", "Kumar Supermart", "Rana Kirana",
+    "Chauhan Store", "Bhatt Provisions", "Semwal Mart", "Dobhal General", "Uniyal Stores",
+    "Nautiyal Kirana", "Panwar Daily", "Rautela Mart", "Kandari Stores", "Butola Provisions",
+    "Mehra Bazaar", "Aswal Kirana", "Gusain Mart", "Bhandari Stores", "Kothari Traders",
 ]
 
-BASE_PRICE = {"COLA24": 500, "MANGO12": 620, "CHIPS48": 400, "DET12": 1150, "ATTA10": 420}
-
-# Recurring history: buyer, supplier, mean days between orders, (min, max) qty per line.
-HISTORY = [
-    ("ganesh", "apex", 4, (20, 60)),
-    ("ganesh", "horizon", 15, (15, 40)),
-    ("ganesh", "freshlink", 25, (10, 25)),
-    ("laxmi", "horizon", 4, (20, 60)),
-    ("laxmi", "apex", 14, (15, 40)),
-    ("laxmi", "metromart", 20, (20, 50)),
-    ("omsai", "ganesh", 5, (8, 20)),
-    ("omsai", "laxmi", 18, (6, 15)),
-    ("sharma", "ganesh", 3, (2, 8)),
-    ("patel", "ganesh", 3, (2, 8)),
-    ("patel", "omsai", 9, (2, 6)),
-    ("citymart", "laxmi", 2, (3, 10)),
-    ("greenbasket", "laxmi", 3, (2, 8)),
-    ("greenbasket", "ganesh", 20, (2, 6)),
-    ("balaji", "laxmi", 4, (2, 6)),
-    ("balaji", "omsai", 6, (2, 6)),
-]
-
-# party, sku, on_hand, reserved
-INVENTORY = [
-    # Apex is short on cola: the open Ganesh order below can only be partly covered.
-    ("apex", "COLA24", 30, 0),
-    ("apex", "MANGO12", 180, 10),
-    ("apex", "CHIPS48", 220, 0),
-    ("apex", "DET12", 140, 0),
-    ("apex", "ATTA10", 300, 20),
-    ("horizon", "COLA24", 150, 0),
-    ("horizon", "MANGO12", 90, 0),
-    ("horizon", "CHIPS48", 40, 0),
-    ("horizon", "DET12", 60, 0),
-    ("horizon", "ATTA10", 120, 0),
-    ("freshlink", "COLA24", 200, 0),
-    ("freshlink", "MANGO12", 60, 0),
-    ("freshlink", "CHIPS48", 150, 0),
-    ("metromart", "COLA24", 250, 0),
-    ("metromart", "MANGO12", 200, 0),
-    ("metromart", "CHIPS48", 300, 0),
-    ("metromart", "DET12", 120, 0),
-    ("metromart", "ATTA10", 400, 0),
-    # Ganesh is running low on atta, so the later of its two open retailer atta orders is short.
-    ("ganesh", "COLA24", 45, 5),
-    ("ganesh", "MANGO12", 30, 0),
-    ("ganesh", "CHIPS48", 60, 4),
-    ("ganesh", "DET12", 25, 0),
-    ("ganesh", "ATTA10", 12, 2),
-    ("laxmi", "COLA24", 70, 0),
-    ("laxmi", "MANGO12", 8, 0),
-    ("laxmi", "CHIPS48", 55, 0),
-    ("laxmi", "DET12", 18, 0),
-    ("laxmi", "ATTA10", 40, 0),
-    ("omsai", "COLA24", 20, 0),
-    ("omsai", "MANGO12", 10, 0),
-    ("omsai", "CHIPS48", 25, 0),
-    ("omsai", "DET12", 6, 0),
-    ("omsai", "ATTA10", 15, 0),
-    ("sharma", "COLA24", 8, 0),
-    ("sharma", "CHIPS48", 14, 0),
-    ("sharma", "ATTA10", 9, 0),
-    ("patel", "COLA24", 4, 0),
-    ("patel", "CHIPS48", 6, 0),
-    ("patel", "DET12", 7, 0),
-    ("citymart", "COLA24", 25, 0),
-    ("citymart", "CHIPS48", 20, 0),
-    ("citymart", "MANGO12", 11, 0),
-    ("greenbasket", "MANGO12", 10, 0),
-    ("greenbasket", "DET12", 3, 0),
-    ("greenbasket", "ATTA10", 15, 0),
-    ("balaji", "COLA24", 12, 0),
-    ("balaji", "ATTA10", 6, 0),
-]
+HISTORY_DAYS = 180
+NOW = datetime.combine(today(), time(10))
 
 
-@dataclass(frozen=True)
-class OpenOrder:
-    buyer: str
-    supplier: str
-    status: OrderStatus
-    placed_days_ago: int
-    promised_in_days: int  # relative to as_of; negative = already overdue
-    lines: dict[str, int]
-    note: str | None = None
+def lane_days(stockist_home: int, area: int) -> int:
+    return 1 + abs(stockist_home - area) // 2
 
 
-# Ordered oldest first, since a supplier's stock is allocated to unshipped orders in creation order.
-OPEN_ORDERS = [
-    OpenOrder("ganesh", "horizon", OrderStatus.confirmed, 4, -1, {"MANGO12": 30, "DET12": 20},
-              "Horizon confirmed but has not dispatched"),
-    OpenOrder("laxmi", "apex", OrderStatus.confirmed, 2, 1, {"COLA24": 20}),
-    OpenOrder("laxmi", "horizon", OrderStatus.dispatched, 3, 1, {"COLA24": 40, "CHIPS48": 30, "ATTA10": 25}),
-    OpenOrder("ganesh", "apex", OrderStatus.placed, 1, 2, {"COLA24": 60, "CHIPS48": 40},
-              "Festival-season top-up"),
-    OpenOrder("laxmi", "metromart", OrderStatus.confirmed, 1, 3, {"MANGO12": 50, "DET12": 30}),
-    OpenOrder("omsai", "ganesh", OrderStatus.dispatched, 1, 0, {"COLA24": 15, "CHIPS48": 12}),
-    OpenOrder("sharma", "ganesh", OrderStatus.confirmed, 1, 1, {"ATTA10": 6, "COLA24": 6}),
-    OpenOrder("patel", "ganesh", OrderStatus.placed, 0, 1, {"ATTA10": 8, "DET12": 4}),
-    OpenOrder("citymart", "laxmi", OrderStatus.placed, 0, 1, {"MANGO12": 12, "CHIPS48": 6}),
-    OpenOrder("greenbasket", "laxmi", OrderStatus.confirmed, 1, 1, {"DET12": 5, "ATTA10": 6}),
-    OpenOrder("balaji", "omsai", OrderStatus.placed, 0, 1, {"COLA24": 4, "ATTA10": 3}),
-    OpenOrder("balaji", "laxmi", OrderStatus.dispatched, 2, 0, {"CHIPS48": 5}),
-]
-
-
-def _at(d: date, hour: int, minute: int = 0) -> datetime:
-    return datetime.combine(d, time(hour, minute))
-
-
-def _add_events(order: Order, timeline: list[tuple[OrderStatus, datetime, str | None]]) -> None:
-    order.events = [OrderEvent(status=s, timestamp=ts, note=note) for s, ts, note in timeline]
-
-
-def _history_order(
-    rng: random.Random, buyer: Party, supplier: Party, link_lead: int, rel: Reliability,
-    skus: list[str], qty_range: tuple[int, int], created_at: datetime,
-) -> Order:
-    promised = created_at.date() + timedelta(days=link_lead)
-    lines = [OrderLine(sku=s, qty=rng.randint(*qty_range)) for s in rng.sample(skus, rng.randint(1, min(3, len(skus))))]
-    order = Order(buyer=buyer, supplier=supplier, created_at=created_at, promised_date=promised, lines=lines)
-    confirmed_at = created_at + timedelta(hours=rng.randint(1, 6))
-
-    if rng.random() < 0.03:
-        order.status = OrderStatus.cancelled
-        _add_events(order, [
-            (OrderStatus.placed, created_at, None),
-            (OrderStatus.cancelled, confirmed_at, rng.choice(["Buyer cancelled", "Supplier out of stock"])),
-        ])
-        return order
-
-    on_time = rel.on_time - (0.15 if in_peak_period(promised) else 0.0)
-    if rng.random() < on_time:
-        delay = rng.choice([-1, 0, 0, 0]) if link_lead >= 2 else 0
-    else:
-        delay = rng.randint(1, rel.max_delay)
-    delivered_at = _at(promised + timedelta(days=delay), rng.randint(9, 18), rng.choice([0, 15, 30, 45]))
-    dispatched_at = max(confirmed_at + timedelta(hours=1), delivered_at - timedelta(hours=rng.randint(4, 20)))
-
-    order.status = OrderStatus.delivered
-    order.delivered_at = delivered_at
-    _add_events(order, [
-        (OrderStatus.placed, created_at, None),
-        (OrderStatus.confirmed, confirmed_at, None),
-        (OrderStatus.dispatched, dispatched_at, None),
-        (OrderStatus.delivered, delivered_at, f"Delivered {delay} day(s) late" if delay > 0 else None),
-    ])
-    return order
-
-
-def _open_order(rng: random.Random, spec: OpenOrder, parties: dict[str, Party], as_of: date) -> Order:
-    created_at = _at(as_of - timedelta(days=spec.placed_days_ago), rng.randint(8, 12), rng.choice([0, 20, 40]))
-    order = Order(
-        buyer=parties[spec.buyer],
-        supplier=parties[spec.supplier],
-        status=spec.status,
-        created_at=created_at,
-        promised_date=as_of + timedelta(days=spec.promised_in_days),
-        lines=[OrderLine(sku=sku, qty=qty) for sku, qty in spec.lines.items()],
-    )
-    timeline = [(OrderStatus.placed, created_at, spec.note)]
-    if spec.status in (OrderStatus.confirmed, OrderStatus.dispatched):
-        timeline.append((OrderStatus.confirmed, created_at + timedelta(hours=3), None))
-    if spec.status == OrderStatus.dispatched:
-        timeline.append((OrderStatus.dispatched, created_at + timedelta(hours=20), None))
-    _add_events(order, timeline)
-    return order
-
-
-def seed(session: Session, as_of: date | None = None, rng_seed: int = 42) -> None:
-    as_of = as_of or today()
-    rng = random.Random(rng_seed)
-
-    session.add_all(Product(sku=sku, name=name, unit=unit) for sku, name, unit in PRODUCTS)
-    parties = {
-        key: Party(name=name, role=role, region=region, phone=phone) for key, name, role, region, phone in PARTIES
-    }
-    session.add_all(parties.values())
-    session.flush()
-
-    link_skus: dict[tuple[str, str], list[str]] = {}
-    link_lead: dict[tuple[str, str], int] = {}
-    for buyer, supplier, lead, mult, skus in LINKS:
-        skus = skus or ALL_SKUS
-        link_skus[buyer, supplier] = skus
-        link_lead[buyer, supplier] = lead
-        session.add_all(
-            SupplyLink(
-                buyer_id=parties[buyer].id,
-                supplier_id=parties[supplier].id,
-                product_sku=sku,
-                nominal_lead_days=lead,
-                price=round(BASE_PRICE[sku] * mult, 2),
-            )
-            for sku in skus
-        )
-
-    session.add_all(
-        Inventory(party_id=parties[p].id, sku=sku, on_hand=on_hand, reserved=reserved)
-        for p, sku, on_hand, reserved in INVENTORY
-    )
-
-    # History stops a few days before as_of so it never overlaps the hand-picked open orders.
-    for buyer, supplier, every, qty_range in HISTORY:
-        key = (buyer, supplier)
-        day = as_of - timedelta(days=HISTORY_DAYS - rng.randint(0, every))
-        while True:
-            created_at = _at(day, rng.randint(8, 19), rng.choice([0, 15, 30, 45]))
-            if created_at.date() + timedelta(days=link_lead[key] + RELIABILITY[supplier].max_delay) >= as_of:
-                break
-            session.add(_history_order(
-                rng, parties[buyer], parties[supplier], link_lead[key], RELIABILITY[supplier],
-                link_skus[key], qty_range, created_at,
-            ))
-            day += timedelta(days=max(1, round(rng.gauss(every, every / 3))))
-
-    for spec in OPEN_ORDERS:
-        session.add(_open_order(rng, spec, parties, as_of))
-
-    # A Horizon order that was cancelled and re-placed with FreshLink after a delay alert.
-    original = _open_order(
-        rng, OpenOrder("ganesh", "horizon", OrderStatus.cancelled, 3, 0, {"COLA24": 30}), parties, as_of
-    )
-    original.events.append(OrderEvent(
-        status=OrderStatus.cancelled, timestamp=original.created_at + timedelta(days=1),
-        note="Rerouted to FreshLink Wholesale",
-    ))
-    session.add(original)
-    session.flush()
-    rerouted = _open_order(
-        rng, OpenOrder("ganesh", "freshlink", OrderStatus.dispatched, 2, 0, {"COLA24": 30}), parties, as_of
-    )
-    rerouted.rerouted_from_id = original.id
-    session.add(rerouted)
+def wipe(session) -> None:
+    for table in reversed(Base.metadata.sorted_tables):
+        session.execute(table.delete())
     session.commit()
 
-    still_open = open_orders(session)
-    for order, result in score_orders(session, still_open, as_of, persist=True):
-        if result.level != "high":
-            continue
-        top = max(result.factors, key=lambda f: f.contribution)
-        session.add(Alert(
-            party_id=order.buyer_id,
-            order_id=order.id,
-            type=AlertType.delay_risk,
-            message=(
-                f"Order #{order.id} from {order.supplier.name} is at high risk of delay "
-                f"(~{result.expected_delay_days:g} day(s)). {top.message}."
-            ),
-        ))
-        # Retailers waiting on this stockist feel the knock-on effect.
-        for downstream in still_open:
-            if downstream.supplier_id == order.buyer_id and {l.sku for l in downstream.lines} & {
-                l.sku for l in order.lines
-            }:
-                session.add(Alert(
-                    party_id=downstream.buyer_id,
-                    order_id=downstream.id,
-                    type=AlertType.downstream_delay,
-                    message=(
-                        f"{order.buyer.name}'s inbound stock is delayed; order #{downstream.id} may arrive late."
-                    ),
-                ))
 
-    session.add(Alert(
-        party_id=parties["laxmi"].id,
-        sku="MANGO12",
-        type=AlertType.reorder,
-        message="Mango juice stock (8 cartons) is below the reorder point. Suggested order: 40 cartons.",
-        acknowledged=False,
-    ))
-    session.commit()
+def at(d: date, hour: int) -> datetime:
+    return datetime.combine(d, time(hour))
+
+
+def random_lines() -> list[OrderLine]:
+    return [OrderLine(sku=sku, qty=rng.randint(2, 20)) for sku, _, _ in rng.sample(PRODUCTS, rng.randint(1, 3))]
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--reset", action="store_true", help="drop and recreate all tables before seeding")
-    args = parser.parse_args()
+    if not inspect(engine).has_table("orders"):
+        raise SystemExit("Tables missing; run `uv run alembic upgrade head` first.")
 
-    if args.reset:
-        Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    with SessionLocal() as session:
-        if not args.reset and session.scalar(select(func.count()).select_from(Party)):
-            raise SystemExit("Database already has data; rerun with --reset to replace it.")
-        seed(session)
-        counts = {m.__tablename__: session.scalar(select(func.count()).select_from(m))
-                  for m in (Party, SupplyLink, Inventory, Order, OrderEvent, Alert)}
-    print("Seeded:", ", ".join(f"{n} {t}" for t, n in counts.items()))
+    with SessionLocal() as s:
+        wipe(s)
+        s.add_all(Product(sku=sku, name=name, unit=unit) for sku, name, unit in PRODUCTS)
+
+        stockists = []
+        for i, (name, home, served) in enumerate(STOCKISTS, 1):
+            p = Party(name=name, role=PartyRole.stockist, area=AREA_LIST[home], phone=f"90000000{i:02d}")
+            p.home, p.served = home, served
+            s.add(p)
+            stockists.append(p)
+        s.flush()
+        for p in stockists:
+            s.add_all(ServiceArea(stockist_id=p.id, area=AREA_LIST[a]) for a in p.served)
+            for sku, _, _ in PRODUCTS:
+                # A few SKUs run dry so alternatives sometimes have only partial coverage.
+                on_hand = 0 if rng.random() < 0.12 else rng.randint(20, 300)
+                s.add(Inventory(party_id=p.id, sku=sku, on_hand=on_hand))
+
+        retailers = []
+        for i, name in enumerate(RETAILER_NAMES, 1):
+            area = i % len(AREA_LIST)
+            p = Party(name=name, role=PartyRole.retailer, area=AREA_LIST[area], phone=f"91000000{i:02d}")
+            p.area_idx = area
+            p.suppliers = [st for st in stockists if area in st.served]
+            s.add(p)
+            retailers.append(p)
+        s.flush()
+
+        past = [  # cause, stockist index, pincode indexes, days ago, extra days the orders actually slipped
+            (DisruptionCause.landslide, 1, [8, 2], 75, (3, 6)),
+            (DisruptionCause.landslide, 4, [8], 40, (4, 5)),
+            (DisruptionCause.road_closure, 2, [6, 7], 50, (1, 3)),
+            (DisruptionCause.weather, 0, [1, 2], 20, (1, 2)),
+        ]
+        past_disruptions = []
+        for cause, st_idx, areas, ago, slip in past:
+            d = Disruption(
+                stockist_id=stockists[st_idx].id, cause=cause, affected_areas=[AREA_LIST[a] for a in areas],
+                reported_at=at(today() - timedelta(days=ago), 7), resolved_at=at(today() - timedelta(days=ago - 4), 18),
+            )
+            s.add(d)
+            past_disruptions.append((d, st_idx, set(areas), ago, slip))
+        s.flush()
+
+        n_history = 0
+        for r in retailers:
+            day = today() - timedelta(days=HISTORY_DAYS)
+            while day < today() - timedelta(days=7):
+                supplier = r.suppliers[0] if rng.random() < 0.75 or len(r.suppliers) == 1 else rng.choice(r.suppliers[1:])
+                normal = lane_days(supplier.home, r.area_idx)
+                promised = day + timedelta(days=normal + 1)
+                actual = normal + (1 if rng.random() < 0.15 else 0) - (1 if normal > 1 and rng.random() < 0.2 else 0)
+                hit = next(
+                    (pd for pd in past_disruptions
+                     if pd[1] == stockists.index(supplier) and r.area_idx in pd[2]
+                     and 0 <= (today() - timedelta(days=pd[3]) - day).days <= normal + 1),
+                    None,
+                )
+                extra = rng.randint(*hit[4]) if hit else 0
+                delivered = day + timedelta(days=actual + extra)
+                order = Order(
+                    buyer_id=r.id, supplier_id=supplier.id, status=OrderStatus.delivered,
+                    payment_mode=PaymentMode.cod if rng.random() < 0.65 else PaymentMode.prepaid,
+                    delivery_area=r.area, created_at=at(day, rng.randint(8, 18)), promised_date=promised,
+                    expected_delivery_date=promised + timedelta(days=extra), delivered_at=at(delivered, 15),
+                    lines=random_lines(),
+                    events=[OrderEvent(status=OrderStatus.placed, timestamp=at(day, 8)),
+                            OrderEvent(status=OrderStatus.delivered, timestamp=at(delivered, 15))],
+                )
+                s.add(order)
+                if hit:
+                    s.flush()
+                    s.add(OrderDisruption(order_id=order.id, disruption_id=hit[0].id, original_eta=promised,
+                                          revised_eta=promised + timedelta(days=extra), actual_delivery=delivered))
+                n_history += 1
+                day += timedelta(days=rng.randint(3, 6))
+
+        n_open = 0
+        statuses = [OrderStatus.placed, OrderStatus.confirmed, OrderStatus.dispatched]
+        for r in retailers:
+            supplier = r.suppliers[0]
+            for _ in range(rng.choice([1, 1, 2])):
+                created = today() - timedelta(days=rng.randint(0, 2))
+                promised = created + timedelta(days=lane_days(supplier.home, r.area_idx) + 1)
+                s.add(Order(
+                    buyer_id=r.id, supplier_id=supplier.id, status=rng.choice(statuses),
+                    payment_mode=PaymentMode.cod if rng.random() < 0.65 else PaymentMode.prepaid,
+                    delivery_area=r.area, created_at=at(created, rng.randint(8, 18)), promised_date=promised,
+                    expected_delivery_date=promised,
+                    needed_by=promised + timedelta(days=rng.randint(0, 3)) if rng.random() < 0.5 else None,
+                    lines=random_lines(),
+                    events=[OrderEvent(status=OrderStatus.placed, timestamp=at(created, 8))],
+                ))
+                n_open += 1
+        s.commit()
+
+        print(f"Seeded {len(stockists)} stockists, {len(retailers)} retailers, {len(PRODUCTS)} SKUs, "
+              f"{n_history} delivered orders, {n_open} open orders, {len(past)} past disruptions.\n")
+        print("Stockists (phone → link in Telegram with /start):")
+        for p in stockists:
+            print(f"  #{p.id:<3} {p.name:<24} {p.phone}  serves {', '.join(AREA_LIST[a] for a in p.served)}")
+        print("\nRetailers:")
+        for p in retailers:
+            print(f"  #{p.id:<3} {p.name:<20} {p.phone}  {p.area} {AREAS[p.area]:<14} buys from {p.suppliers[0].name}")
 
 
 if __name__ == "__main__":

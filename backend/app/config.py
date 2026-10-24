@@ -9,18 +9,23 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./supply.db"
     telegram_bot_token: str = ""
 
-    # Risk / alerting
-    risk_alert_threshold: float = 0.6
-    risk_medium_threshold: float = 0.35
-    service_level: float = 0.95
-    review_period_days: int = 7
-    stats_lookback_days: int = 180
+    # Lane history: how long deliveries from a stockist to a pincode normally take
+    lane_lookback_days: int = 180
+    lane_min_samples: int = 3
+    default_lane_days: int = 2
 
-    # Peak periods (MM-DD ranges, inclusive) when delays are more likely
-    peak_periods: list[tuple[str, str]] = [("10-15", "11-15"), ("12-20", "12-31")]
+    # Extra days assumed for a disruption when neither the reporter nor history can tell us
+    default_cause_delay_days: dict[str, int] = {
+        "weather": 2,
+        "road_closure": 2,
+        "landslide": 4,
+        "flood": 4,
+        "strike": 2,
+        "vehicle_breakdown": 1,
+        "other": 2,
+    }
 
-    scheduler_enabled: bool = True
-    scheduler_interval_minutes: int = 60
+    max_alternatives: int = 5
 
 
 @lru_cache

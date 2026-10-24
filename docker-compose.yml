@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: supply
+      POSTGRES_PASSWORD: supply
+      POSTGRES_DB: supply
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "supply"]
+      interval: 2s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://supply:supply@db:5432/supply
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    ports: ["8000:8000"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  bot:
+    build: ./bot
+    environment:
+      BACKEND_URL: http://backend:8000
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}  # bot exits with a clear message if empty
+    depends_on: [backend]
+    profiles: [bot]
+
+volumes:
+  pgdata:

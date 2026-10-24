@@ -1,7 +1,7 @@
 import enum
 
-from sqlalchemy import Enum, Float, ForeignKey, Integer, String, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Boolean, Enum, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 
@@ -9,7 +9,6 @@ from app.db import Base
 class PartyRole(str, enum.Enum):
     distributor = "distributor"
     stockist = "stockist"
-    sub_stockist = "sub_stockist"
     retailer = "retailer"
 
 
@@ -18,10 +17,22 @@ class Party(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
-    role: Mapped[PartyRole] = mapped_column(Enum(PartyRole, native_enum=False, length=20))
-    region: Mapped[str | None] = mapped_column(String(80))
-    phone: Mapped[str | None] = mapped_column(String(40))
+    role: Mapped[PartyRole] = mapped_column(Enum(PartyRole, native_enum=False, length=20), index=True)
+    area: Mapped[str] = mapped_column(String(20), index=True)  # pincode
+    phone: Mapped[str | None] = mapped_column(String(40), unique=True)
     chat_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    trusted: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class ServiceArea(Base):
+    """A pincode a stockist delivers to."""
+
+    __tablename__ = "service_areas"
+    __table_args__ = (UniqueConstraint("stockist_id", "area"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stockist_id: Mapped[int] = mapped_column(ForeignKey("parties.id"), index=True)
+    area: Mapped[str] = mapped_column(String(20), index=True)
 
 
 class Product(Base):
@@ -30,22 +41,6 @@ class Product(Base):
     sku: Mapped[str] = mapped_column(String(40), primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
     unit: Mapped[str] = mapped_column(String(20), default="unit")
-
-
-class SupplyLink(Base):
-    """Who can buy which SKU from whom. Every link beyond the primary one is an alternate source."""
-
-    __tablename__ = "supply_links"
-    __table_args__ = (UniqueConstraint("buyer_id", "supplier_id", "product_sku"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    buyer_id: Mapped[int] = mapped_column(ForeignKey("parties.id"), index=True)
-    supplier_id: Mapped[int] = mapped_column(ForeignKey("parties.id"), index=True)
-    product_sku: Mapped[str] = mapped_column(ForeignKey("products.sku"))
-    nominal_lead_days: Mapped[int] = mapped_column(Integer)
-    price: Mapped[float] = mapped_column(Float)
-
-    supplier: Mapped[Party] = relationship(foreign_keys=[supplier_id])
 
 
 class Inventory(Base):

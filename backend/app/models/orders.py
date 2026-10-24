@@ -20,6 +20,11 @@ class OrderStatus(str, enum.Enum):
 OPEN_STATUSES = (OrderStatus.placed, OrderStatus.confirmed, OrderStatus.dispatched)
 
 
+class PaymentMode(str, enum.Enum):
+    cod = "cod"
+    prepaid = "prepaid"
+
+
 class Order(Base):
     __tablename__ = "orders"
 
@@ -29,18 +34,22 @@ class Order(Base):
     status: Mapped[OrderStatus] = mapped_column(
         Enum(OrderStatus, native_enum=False, length=20), default=OrderStatus.placed, index=True
     )
+    payment_mode: Mapped[PaymentMode] = mapped_column(
+        Enum(PaymentMode, native_enum=False, length=10), default=PaymentMode.cod
+    )
+    delivery_area: Mapped[str] = mapped_column(String(20), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     promised_date: Mapped[date] = mapped_column(Date)
+    expected_delivery_date: Mapped[date] = mapped_column(Date)  # current ETA; moves when disrupted
+    needed_by: Mapped[date | None] = mapped_column(Date)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime)
-    rerouted_from_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"))
+    switched_to_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"))
 
     buyer: Mapped[Party] = relationship(foreign_keys=[buyer_id])
     supplier: Mapped[Party] = relationship(foreign_keys=[supplier_id])
-    lines: Mapped[list["OrderLine"]] = relationship(
-        back_populates="order", cascade="all, delete-orphan"
-    )
+    lines: Mapped[list["OrderLine"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     events: Mapped[list["OrderEvent"]] = relationship(
-        back_populates="order", cascade="all, delete-orphan", order_by="OrderEvent.timestamp"
+        back_populates="order", cascade="all, delete-orphan", order_by="OrderEvent.id"
     )
 
     @property
