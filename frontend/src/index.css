@@ -1123,3 +1123,38 @@ input.qty {
   border-color: var(--danger);
   color: var(--danger);
 }
+
+/* UPI QR modal */
+.upi-qr-trigger {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -8px;
+  margin-bottom: 8px;
+}
+.upi-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 4px;
+  text-align: center;
+}
+.upi-qr svg {
+  display: block;
+  border-radius: 8px;
+}
+.upi-qr-id {
+  font-size: 14px;
+  color: var(--text);
+}
+.upi-qr-amount {
+  font-size: 15px;
+  color: var(--text);
+}
+.upi-qr-hint {
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 280px;
+  margin: 0;
+  line-height: 1.5;
+}
