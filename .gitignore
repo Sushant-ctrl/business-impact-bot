@@ -10,3 +10,6 @@ dist/
 
 # Deployment secrets
 *.pem
+
+# Editor settings
+.idea/

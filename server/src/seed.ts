@@ -100,6 +100,9 @@ const retailers: Retailer[] = [
   { id: 'patel', name: 'Patel Kirana', area: 'Kharadi', distributorIds: ['distA', 'distB'] },
   { id: 'citymart', name: 'City Mart Express', area: 'Baner', distributorIds: ['distA', 'distB'] },
   { id: 'greenbasket', name: 'Green Basket Supermarket', area: 'Aundh', distributorIds: ['distA', 'distB'] },
+  { id: 'chabra', name: 'Chabra Stores', area: 'Hadapsar', distributorIds: ['distA', 'distB'] },
+  { id: 'pawan', name: 'Pawan Kirana', area: 'Kothrud', distributorIds: ['distA', 'distB'] },
+  { id: 'shubham', name: 'Shubham Mart', area: 'Wakad', distributorIds: ['distA', 'distB'] },
 ];
 
 // [retailer, product, qty on shelf at the anchor, average daily sales]
@@ -116,6 +119,12 @@ const shelf: [string, string, number, number][] = [
   ['greenbasket', 'mango', 10, 4],
   ['greenbasket', 'detergent', 3, 1.5],
   ['greenbasket', 'atta', 15, 3],
+  ['chabra', 'cola', 12, 4],
+  ['chabra', 'atta', 10, 2],
+  ['pawan', 'chips', 9, 3],
+  ['pawan', 'detergent', 5, 1],
+  ['shubham', 'mango', 14, 3],
+  ['shubham', 'chips', 16, 4],
 ];
 
 type SeedOrder = Omit<Order, 'retailerStock' | 'avgDailySales' | 'timeline'> & {
