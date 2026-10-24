@@ -1,8 +1,9 @@
-import type { ReactNode } from 'react';
-import type { AppState, Notification, Order, TimelineEvent } from './data';
-import { DEMO_NOW } from './data';
-import { days, findProduct, fmt, money, rankSuppliers, stockoutRisk } from './logic';
-import type { SupplierOption } from './logic';
+import { useEffect, useRef, useState } from 'react';
+import type { FormEvent, ReactNode } from 'react';
+import { days, findProduct, fmt, money, rankSuppliers, stockoutRisk } from '../../shared/logic.ts';
+import type { SupplierOption } from '../../shared/logic.ts';
+import type { Message, Notification, Order, Role, TimelineEvent, World } from '../../shared/types.ts';
+import type { Toast } from './api.tsx';
 
 export function Badge({ tone = 'neutral', children }: { tone?: string; children: ReactNode }) {
   return <span className={`badge badge-${tone}`}>{children}</span>;
@@ -34,6 +35,30 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
   );
 }
 
+export function Tabs<T extends string>({ value, onChange, items }: { value: T; onChange: (t: T) => void; items: [T, ReactNode][] }) {
+  return (
+    <div className="tabs" role="tablist">
+      {items.map(([key, label]) => (
+        <button key={key} role="tab" aria-selected={value === key} className={value === key ? 'active' : ''} onClick={() => onChange(key)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id: number) => void }) {
+  return (
+    <div className="toasts" aria-live="polite">
+      {items.map((t) => (
+        <div key={t.id} className={`toast toast-${t.tone}`} onClick={() => onDismiss(t.id)}>
+          {t.message}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function Notifications({
   items,
   onOpen,
@@ -47,9 +72,7 @@ export function Notifications({
   return (
     <div className="card">
       <div className="card-head">
-        <h3>
-          Notifications {unread > 0 && <span className="count">{unread}</span>}
-        </h3>
+        <h3>Notifications {unread > 0 && <span className="count">{unread}</span>}</h3>
         {unread > 0 && (
           <button className="btn btn-link" onClick={onMarkRead}>
             Mark all read
@@ -93,8 +116,56 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
   );
 }
 
-export function RiskPanel({ state, order }: { state: AppState; order: Order }) {
-  const r = stockoutRisk(order);
+export function Thread({
+  messages,
+  me,
+  names,
+  onSend,
+}: {
+  messages: Message[];
+  me: Role;
+  names: Record<Role, string>;
+  onSend: (body: string) => Promise<boolean>;
+}) {
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => end.current?.scrollIntoView({ block: 'nearest' }), [messages.length]);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!text.trim() || sending) return;
+    setSending(true);
+    if (await onSend(text.trim())) setText('');
+    setSending(false);
+  };
+
+  return (
+    <div className="thread">
+      <div className="thread-list">
+        {messages.length === 0 && <p className="muted small">No messages yet. Messages notify the other party instantly.</p>}
+        {messages.map((m) => (
+          <div key={m.id} className={`bubble ${m.role === me ? 'bubble-me' : ''}`}>
+            <div className="bubble-meta">
+              {names[m.role]} · {fmt(m.at)}
+            </div>
+            {m.body}
+          </div>
+        ))}
+        <div ref={end} />
+      </div>
+      <form className="thread-form" onSubmit={submit}>
+        <input value={text} maxLength={1000} placeholder="Write a message…" onChange={(e) => setText(e.target.value)} />
+        <button className="btn btn-primary" disabled={!text.trim() || sending}>
+          Send
+        </button>
+      </form>
+    </div>
+  );
+}
+
+export function RiskPanel({ state, order }: { state: World; order: Order }) {
+  const r = stockoutRisk(order, state.now);
   const unit = findProduct(state, order.productId).unit;
   return (
     <div className={`risk ${r.high ? 'risk-high' : 'risk-low'}`}>
@@ -123,10 +194,13 @@ export function RiskPanel({ state, order }: { state: AppState; order: Order }) {
         </div>
       </div>
       <p className="assumption">
-        {r.stockoutAt && <>Estimated stockout: <b>{fmt(r.stockoutAt)}</b>. </>}
-        Estimate = current stock ÷ average daily sales, measured from {fmt(DEMO_NOW)} (demo clock), assuming steady sales.
-        It is high risk when stock runs out at or before the current ETA ({fmt(order.currentEta)}). A basic estimate, not a
-        demand forecast.
+        {r.stockoutAt && (
+          <>
+            Estimated stockout: <b>{fmt(r.stockoutAt)}</b>.{' '}
+          </>
+        )}
+        Shelf stock is the retailer's last count minus average daily sales since then. It is high risk when stock runs out at or
+        before the current ETA ({fmt(order.currentEta)}).
       </p>
     </div>
   );
@@ -138,7 +212,7 @@ export function SupplierTable({
   action,
   highlightId,
 }: {
-  state: AppState;
+  state: World;
   order: Order;
   action?: (opt: SupplierOption) => ReactNode;
   highlightId?: string;
@@ -193,8 +267,8 @@ export function SupplierTable({
         </tbody>
       </table>
       <p className="assumption">
-        Ranked by: 1) enough stock for the full quantity, 2) delivery before estimated stockout, 3) lowest price. Supplier
-        stock and lead times are demo data.
+        Ranked by: 1) enough stock for the full quantity, 2) delivery before estimated stockout, 3) lowest price. Stock and prices
+        are live.
       </p>
     </div>
   );

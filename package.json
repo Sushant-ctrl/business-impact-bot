@@ -1,0 +1,11 @@
+{
+  "name": "recoverroute",
+  "private": true,
+  "scripts": {
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "start": "npm run build && npm --prefix server start",
+    "test": "npm --prefix server test"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "recoverroute-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "RecoverRoute API: SQLite persistence, live updates and OpenRouter-powered assistance",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=.env src/index.ts",
+    "start": "node --env-file-if-exists=.env src/index.ts",
+    "seed": "node --env-file-if-exists=.env -e \"import('./src/seed.ts').then(m => m.seed())\"",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.8.3"
+  }
+}
