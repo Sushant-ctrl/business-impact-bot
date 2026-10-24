@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RecoverRoute Demo</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --surface: #ffffff; --border: #e3e6eb; --text: #1c2430; --muted: #667085;
+    --primary: #2f5bea; --primary-soft: #eaf0ff; --danger: #c4372d; --danger-soft: #fdecea;
+    --warning: #a86200; --warning-soft: #fff4e0; --success: #1f7a4d; --success-soft: #e6f5ec;
+    --radius: 12px;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    color: var(--text);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+
+  .slide {
+    position: absolute; inset: 0; display: none; flex-direction: column; justify-content: center;
+    padding: clamp(24px, 6vw, 96px); max-width: 1200px; margin: 0 auto;
+  }
+  .slide.active { display: flex; animation: in .3s ease; }
+  @keyframes in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  .eyebrow { color: var(--primary); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; font-size: 14px; margin-bottom: 12px; }
+  h1 { font-size: clamp(36px, 6vw, 68px); line-height: 1.05; margin: 0 0 20px; letter-spacing: -.02em; }
+  h2 { font-size: clamp(28px, 4vw, 44px); line-height: 1.1; margin: 0 0 28px; letter-spacing: -.01em; }
+  p.lead { font-size: clamp(18px, 2vw, 24px); color: var(--muted); max-width: 820px; line-height: 1.45; margin: 0; }
+  .accent { color: var(--primary); }
+
+  .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; }
+  .card h3 { margin: 0 0 8px; font-size: 19px; }
+  .card p, .card li { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.5; }
+  .card ul { margin: 0; padding-left: 18px; }
+  .card li + li { margin-top: 6px; }
+  .tag { display: inline-block; font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 999px; margin-bottom: 12px; }
+  .t-danger { background: var(--danger-soft); color: var(--danger); }
+  .t-warning { background: var(--warning-soft); color: var(--warning); }
+  .t-success { background: var(--success-soft); color: var(--success); }
+  .t-primary { background: var(--primary-soft); color: var(--primary); }
+
+  .steps { counter-reset: s; display: grid; gap: 14px; }
+  .step { display: flex; gap: 18px; align-items: flex-start; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 22px; }
+  .step::before { counter-increment: s; content: counter(s); flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--primary); color: #fff; display: grid; place-items: center; font-weight: 700; }
+  .step b { display: block; margin-bottom: 2px; font-size: 18px; }
+  .step span { color: var(--muted); font-size: 16px; }
+  .quote { background: var(--primary-soft); color: var(--primary); padding: 1px 6px; border-radius: 4px; font-style: italic; }
+
+  pre { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; font-size: clamp(12px, 1.4vw, 16px); line-height: 1.55; overflow-x: auto; margin: 0 0 18px; }
+  .big-link { font-size: clamp(22px, 3vw, 34px); font-weight: 700; color: var(--primary); text-decoration: none; }
+
+  nav { position: fixed; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 12px; padding: 12px 20px; font-size: 13px; color: var(--muted); }
+  nav button { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; }
+  .bar { flex: 1; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--primary); transition: width .3s; }
+</style>
+</head>
+<body>
+
+<!-- 1. Title -->
+<section class="slide">
+  <div class="eyebrow">Delivery disruption &amp; recovery</div>
+  <h1>Recover<span class="accent">Route</span></h1>
+  <p class="lead">When a truck breaks down or a road closes, RecoverRoute shows which kirana stores will run out first,
+    who should get the limited stock, and which other suppliers can deliver in time. Every costly decision stays with a person.</p>
+</section>
+
+<!-- 2. Problem -->
+<section class="slide">
+  <div class="eyebrow">The problem</div>
+  <h2>A late truck means empty shelves and lost sales</h2>
+  <div class="grid">
+    <div class="card"><span class="tag t-danger">Retailers</span><h3>Find out too late</h3>
+      <p>Kirana stores learn about delays at the last minute and can't tell if they'll run out before the goods arrive.</p></div>
+    <div class="card"><span class="tag t-warning">Distributors</span><h3>Decide by phone</h3>
+      <p>When stock is short, who gets it is decided over calls and guesswork instead of who needs it most.</p></div>
+    <div class="card"><span class="tag t-primary">Both</span><h3>Don't know who else can supply</h3>
+      <p>Other suppliers exist, but nobody can quickly compare their stock, price and delivery time.</p></div>
+  </div>
+</section>
+
+<!-- 3. Solution -->
+<section class="slide">
+  <div class="eyebrow">What it does</div>
+  <h2>Two portals, one live backend</h2>
+  <div class="grid">
+    <div class="card"><span class="tag t-primary">Distributor portal</span>
+      <ul>
+        <li>Report a disruption in plain words; AI drafts the reason, new ETA and a message to the retailer</li>
+        <li>Allocate scarce stock to the retailer with the fewest days of stock first</li>
+        <li>Partial deliveries, alternative suppliers, retailer network view</li>
+      </ul></div>
+    <div class="card"><span class="tag t-success">Retailer portal</span>
+      <ul>
+        <li>Stockout risk on every open order</li>
+        <li><b>What should I do?</b>: wait, cancel, or order from a ranked alternative supplier</li>
+        <li>Shelf stock tracking, distributor comparison, UPI QR payments</li>
+      </ul></div>
+  </div>
+  <p class="lead" style="margin-top:22px;font-size:17px">Both portals also have chat on each order, live notifications,
+    and an AI assistant that answers questions about your own live data.</p>
+</section>
+
+<!-- 4. Demo walkthrough -->
+<section class="slide">
+  <div class="eyebrow">Live demo · about 3 minutes</div>
+  <h2>A landslide hits order #1042</h2>
+  <div class="steps">
+    <div class="step"><div><b>Distributor reports the disruption</b>
+      <span>Types <span class="quote">landslide on Katraj ghat, truck reaches them Monday evening</span>, clicks ✦ Draft report, then sends it.</span></div></div>
+    <div class="step"><div><b>Retailer sees the risk</b>
+      <span>Sharma General Store: about 1.6 days of stock left, so stockout risk is high. They click ✦ Get a recommendation.</span></div></div>
+    <div class="step"><div><b>Retailer requests the recommended supplier</b>
+      <span>Suppliers are ranked by having enough stock, delivering before the stockout, then lowest price.</span></div></div>
+    <div class="step"><div><b>Distributor confirms</b>
+      <span>Both portals update right away and the order is rerouted.</span></div></div>
+  </div>
+</section>
+
+<!-- 5. Allocation -->
+<section class="slide">
+  <div class="eyebrow">Then show</div>
+  <h2>Scarce stock goes to whoever runs out first</h2>
+  <div class="grid">
+    <div class="card"><span class="tag t-warning">Inventory &amp; allocation</span><h3>12 cartons of cola, 3 orders</h3>
+      <p>Orders are sorted by the retailer's days of stock left (shelf stock ÷ daily sales) and filled in that order. The distributor can override.</p></div>
+    <div class="card"><span class="tag t-primary">Assistant</span><h3>“Brief me: what needs my attention today?”</h3>
+      <p>Answers from that account's own live orders, stock and requests.</p></div>
+    <div class="card"><span class="tag t-success">Reliable</span><h3>Works without AI</h3>
+      <p>If the AI is unavailable, drafting and recommendations fall back to built-in rules, and the UI says which source answered.</p></div>
+  </div>
+</section>
+
+<!-- 6. Governance -->
+<section class="slide">
+  <div class="eyebrow">Pine Labs AgenticOrg</div>
+  <h2>Agents that recommend, people who approve</h2>
+  <div class="grid">
+    <div class="card"><h3>Delivery Disruption Assistant</h3>
+      <p>Disruption cards, stockout risk, recovery options and retailer messages.</p></div>
+    <div class="card"><h3>Stock Allocation &amp; Alternate Sourcing Agent</h3>
+      <p>Allocation by days of cover, supplier ranking, partial deliveries and draft purchase orders. Uses the same rules as the app.</p></div>
+    <div class="card"><span class="tag t-danger">Human in the loop</span><h3>Shadow mode</h3>
+      <p>Both agents need a person's approval when confidence is below 0.9, and the sourcing agent also for amounts over ₹10,000. They never commit stock or spend money on their own.</p></div>
+  </div>
+</section>
+
+<!-- 7. Architecture -->
+<section class="slide">
+  <div class="eyebrow">How it's built</div>
+  <h2>Small, fast, no runtime dependencies</h2>
+<pre>frontend/ (React + Vite) ──HTTP /api──▶ server/ (Node, SQLite) ──▶ OpenRouter (AI, optional)
+        ▲                                 │                    └─▶ AgenticOrg (agents, optional)
+        └────── live updates (SSE) ───────┘
+
+shared/  types + pure domain logic used by both</pre>
+  <div class="grid">
+    <div class="card"><h3>One set of rules</h3><p>Stockout risk, supplier ranking and allocation live in <code>shared/logic.ts</code>.</p></div>
+    <div class="card"><h3>Live</h3><p>Each change is saved in one database transaction and pushed to every open portal.</p></div>
+    <div class="card"><h3>Simple to run</h3><p>Built-in <code>node:sqlite</code>. Demo data reseeds to the current hour.</p></div>
+  </div>
+</section>
+
+<!-- 8. Close -->
+<section class="slide">
+  <div class="eyebrow">Try it</div>
+  <h1>Fewer stockouts.<br><span class="accent">People stay in charge.</span></h1>
+  <p class="lead" style="margin-bottom:24px">Open Distributor A and Sharma General Store side by side and break a delivery.</p>
+  <a class="big-link" href="https://16.178.3.52/">https://16.178.3.52</a>
+</section>
+
+<nav>
+  <button id="prev" aria-label="Previous slide">←</button>
+  <button id="next" aria-label="Next slide">→</button>
+  <div class="bar"><i id="progress"></i></div>
+  <span id="count"></span>
+</nav>
+
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  let i = Math.max(0, Math.min(slides.length - 1, parseInt(location.hash.slice(1), 10) - 1 || 0));
+  function show(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, k) => s.classList.toggle('active', k === i));
+    document.getElementById('count').textContent = `${i + 1} / ${slides.length}`;
+    document.getElementById('progress').style.width = `${((i + 1) / slides.length) * 100}%`;
+    history.replaceState(null, '', `#${i + 1}`);
+  }
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); show(i + 1); }
+    if (['ArrowLeft', 'PageUp', 'Backspace'].includes(e.key)) { e.preventDefault(); show(i - 1); }
+    if (e.key === 'Home') show(0);
+    if (e.key === 'End') show(slides.length - 1);
+    if (e.key === 'f') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  });
+  document.getElementById('prev').onclick = () => show(i - 1);
+  document.getElementById('next').onclick = () => show(i + 1);
+  show(i);
+</script>
+</body>
+</html>
