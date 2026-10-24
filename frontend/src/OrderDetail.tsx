@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { DEMO_NOW, REASON_LABELS } from './data';
-import type { DisruptionReason, Order, Role } from './data';
+import type { DisruptionReason, Order, Role, Supplier } from './data';
 import {
   addHours,
   findProduct,
@@ -20,6 +21,9 @@ import {
 } from './logic';
 import { useStore } from './store';
 import { Badge, Modal, RiskPanel, SupplierTable, Timeline } from './ui';
+
+// Replace with the real distributor UPI ID before going live.
+const DISTRIBUTOR_UPI_ID = 'sushantku24@okaxis';
 
 export function DisruptionForm({ order, mode, onClose }: { order: Order; mode: 'report' | 'update'; onClose: () => void }) {
   const { dispatch } = useStore();
@@ -97,6 +101,21 @@ export function DisruptionForm({ order, mode, onClose }: { order: Order; mode: '
   );
 }
 
+function UpiQrModal({ order, dist, onClose }: { order: Order; dist: Supplier; onClose: () => void }) {
+  const amount = order.quantity * order.unitPrice;
+  const upiUri = `upi://pay?pa=${DISTRIBUTOR_UPI_ID}&pn=${encodeURIComponent(dist.name)}&am=${amount.toFixed(2)}&cu=INR&tn=${encodeURIComponent('Order #' + order.id)}`;
+  return (
+    <Modal title={`Pay via UPI · Order #${order.id}`} onClose={onClose}>
+      <div className="upi-qr">
+        <QRCodeSVG value={upiUri} size={256} level="M" />
+        <div className="upi-qr-id">UPI ID: <b>{DISTRIBUTOR_UPI_ID}</b></div>
+        <div className="upi-qr-amount">Amount: <b>{money(amount)}</b></div>
+        <p className="upi-qr-hint">Scan this QR code using Google Pay, PhonePe, Paytm, or any UPI app to make your payment.</p>
+      </div>
+    </Modal>
+  );
+}
+
 export function OrderDetail({
   orderId,
   role,
@@ -110,6 +129,7 @@ export function OrderDetail({
 }) {
   const { state } = useStore();
   const [form, setForm] = useState<'report' | 'update' | null>(null);
+  const [showQr, setShowQr] = useState(false);
   const order = state.orders.find((o) => o.id === orderId);
   if (!order) return null;
   const product = findProduct(state, order.productId);
@@ -167,6 +187,12 @@ export function OrderDetail({
             </div>
           </div>
 
+          <div className="upi-qr-trigger">
+            <button className="btn btn-sm" onClick={() => setShowQr(true)}>
+              View UPI QR
+            </button>
+          </div>
+
           {order.disruption && (
             <div className="callout callout-danger">
               <b>Disruption: {REASON_LABELS[order.disruption.reason]}</b>
@@ -190,6 +216,7 @@ export function OrderDetail({
         </div>
       </aside>
       {form && <DisruptionForm order={order} mode={form} onClose={() => setForm(null)} />}
+      {showQr && <UpiQrModal order={order} dist={dist} onClose={() => setShowQr(false)} />}
     </div>
   );
 }
