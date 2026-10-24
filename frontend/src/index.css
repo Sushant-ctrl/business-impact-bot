@@ -1180,8 +1180,16 @@ input.qty {
   border-color: #f0c98a;
 }
 .agent-run-failed,
-.agent-run-budget_exceeded {
+.agent-run-budget_exceeded,
+.agent-run-rejected {
   border-color: #f2b8b2;
+}
+.agent-decision {
+  margin-top: 8px;
+}
+.agent-overrides {
+  margin: 4px 0 0;
+  padding-left: 18px;
 }
 .agent-grid {
   display: grid;

@@ -112,9 +112,17 @@ The app stores `run_id`, `hitl_trigger`, latency and cost on each run and shows 
 | A disruption is reported (automatic), or **Run now** in the order drawer | Delivery Disruption Assistant | The order, disruption, original and revised ETA, stockout risk, warehouse stock, ranked alternatives | Shows the disruption card in the order drawer and notifies the distributor |
 
 - Runs execute in the background (`agent_runs` table) because they can take minutes; portals update over SSE.
-- `hitl_triggered` runs show as **Awaiting approval** with the platform's reason and a link to the AgenticOrg Approvals
-  page. Their allocations can still be loaded into the table as a draft (the distributor confirms there), but supplier
-  suggestions can't be sent to retailers until the run is approved in AgenticOrg.
+- `hitl_triggered` runs show as **Awaiting approval** with the platform's reason, a link to the AgenticOrg Approvals
+  page, and **Approve** / **Reject** buttons. The decision is recorded on the run in RecoverRoute (`decision`,
+  `decided_at`, `decision_note`; a rejection needs a reason), because the API key can't read the platform's approvals
+  back. Allocations from a held run can still be loaded into the table as a draft, but supplier suggestions can't be
+  sent until the run is approved (or completed), and a rejected plan can't be loaded or applied.
+- When the distributor confirms an allocation loaded from a plan, the confirmed quantities are stored on the run
+  (`applied_allocations`, `applied_at`), so the UI can show where the human changed the agent's numbers. The Agents tab
+  has a **Human in the loop** summary: runs held, awaiting decision, approved, rejected, and plans edited before applying.
+- The seed includes this history: an approved plan the distributor overrode (#1042, agent 16 → 20), an approved
+  disruption card (#1043), a rejected one with the reason (#1045, Distributor B), a plan cleared by policy and applied
+  as proposed (#1049, Distributor B), and Distributor A's current plan still awaiting a decision.
 - An order holds one suggested supplier, so when the agent splits a shortfall across suppliers, its first pick is sent.
 - Errors (bad key, missing `agents:run` scope, rate limits, network) are stored on the run and shown in the UI.
 - Runs still in progress when the server restarts are marked failed on startup.
@@ -132,5 +140,5 @@ Run through the app against the real platform with the seed data:
 Both runs came back `hitl_triggered`: the agents report 0.7 confidence against the 0.9 floor. Lower the confidence floor
 in AgenticOrg (agent → Config) if runs should complete without approval.
 
-Not yet done: polling AgenticOrg for the outcome of a held run (the run endpoint is the only one the `agents:run` key can call; run, task and approval lookups return 401),
+Not yet done: syncing approvals made in the AgenticOrg UI back into RecoverRoute (the run endpoint is the only one the `agents:run` key can call; run, task and approval lookups return 401, so decisions are recorded in RecoverRoute instead),
 and giving the agents a connector so they can query RecoverRoute themselves instead of receiving data in the task.

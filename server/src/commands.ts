@@ -168,10 +168,20 @@ export function updateEta(distributorId: string, orderId: string, body: { eta?: 
   c.event(o, 'Retailer notified', 'system');
 }
 
-export function confirmAllocation(distributorId: string, body: { allocations?: unknown }) {
+/**
+ * Commits the allocation table. When the table was loaded from an AgenticOrg plan (`agentRunId`), what the distributor
+ * actually confirmed is stored on that run so the agent's proposal and the human's decision can be compared.
+ */
+export function confirmAllocation(distributorId: string, body: { allocations?: unknown; agentRunId?: unknown }) {
   const c = begin();
   const dist = requireDistributor(c.w, distributorId);
   if (!Array.isArray(body.allocations)) throw bad('allocations must be a list.');
+  const agentRun = body.agentRunId == null ? undefined : repo.loadAgentRun(distributorId, String(body.agentRunId));
+  if (body.agentRunId != null) {
+    if (!agentRun || agentRun.kind !== 'allocation' || !agentRun.plan) throw new HttpError(404, 'Agent plan not found');
+    if (agentRun.decision === 'rejected') throw conflict('You rejected this agent plan; it cannot be applied.');
+    if (agentRun.appliedAt) throw conflict('This agent plan was already applied.');
+  }
   for (const a of body.allocations as { orderId?: unknown; qty?: unknown }[]) {
     const o = ownedOrder(c.w, 'distributor', distributorId, String(a.orderId));
     if (!wholeNumber(a.qty, 0)) throw bad(`#${o.id}: quantity must be a whole number ≥ 0.`);
@@ -201,6 +211,10 @@ export function confirmAllocation(distributorId: string, body: { allocations?: u
         : `Order #${o.id}: all ${o.quantity} ${unit} allocated and ready to dispatch.`,
       short > 0 ? 'warning' : 'success',
     );
+  }
+  if (agentRun) {
+    const applied = (body.allocations as { orderId: unknown; qty: number }[]).map((a) => ({ orderId: String(a.orderId), qty: a.qty }));
+    repo.recordAppliedPlan(agentRun.id, applied, c.now);
   }
 }
 

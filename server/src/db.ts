@@ -6,6 +6,8 @@ import { DatabaseSync } from 'node:sqlite';
 import type { SQLInputValue } from 'node:sqlite';
 import { daysBetween, nowIso } from '../../shared/logic.ts';
 import type {
+  AgentDecision,
+  AgentPlan,
   AgentRun,
   InventoryItem,
   Message,
@@ -80,6 +82,11 @@ for (const [col, type] of [
   ['hitl_reason', 'TEXT'],
   ['latency_ms', 'INTEGER'],
   ['cost_usd', 'REAL'],
+  ['decision', 'TEXT'],
+  ['decided_at', 'TEXT'],
+  ['decision_note', 'TEXT'],
+  ['applied_allocations', 'TEXT'],
+  ['applied_at', 'TEXT'],
 ]) {
   const cols = db.prepare('PRAGMA table_info(agent_runs)').all() as { name: string }[];
   if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE agent_runs ADD COLUMN ${col} ${type}`);
@@ -389,13 +396,30 @@ export function markSourcingSent(id: string, at: string) {
   run('UPDATE agent_runs SET sourcing_sent_at = ? WHERE id = ?', at, Number(id));
 }
 
+export function recordAgentDecision(id: string, decision: AgentDecision, at: string, note?: string) {
+  run('UPDATE agent_runs SET decision = ?, decided_at = ?, decision_note = ? WHERE id = ?', decision, at, note ?? null, Number(id));
+}
+
+export function recordAppliedPlan(id: string, allocations: AgentPlan['allocations'], at: string) {
+  run('UPDATE agent_runs SET applied_allocations = ?, applied_at = ? WHERE id = ?', JSON.stringify(allocations), at, Number(id));
+}
+
 /** Runs left in `running` by a server restart can never finish. */
 export function failInterruptedRuns(at: string) {
   run(`UPDATE agent_runs SET status = 'failed', error = 'Interrupted by a server restart', finished_at = ? WHERE status = 'running'`, at);
 }
 
 export function loadAgentRuns(distributorId: string): AgentRun[] {
-  return all('SELECT * FROM agent_runs WHERE distributor_id = ? ORDER BY id DESC LIMIT 50', distributorId).map((r) => ({
+  return all('SELECT * FROM agent_runs WHERE distributor_id = ? ORDER BY id DESC LIMIT 50', distributorId).map(toAgentRun);
+}
+
+export function loadAgentRun(distributorId: string, id: string): AgentRun | undefined {
+  const [r] = all('SELECT * FROM agent_runs WHERE distributor_id = ? AND id = ?', distributorId, Number(id));
+  return r && toAgentRun(r);
+}
+
+function toAgentRun(r: Row): AgentRun {
+  return {
     id: String(r.id),
     kind: String(r.kind) as AgentRun['kind'],
     agentId: String(r.agent_id),
@@ -413,5 +437,10 @@ export function loadAgentRuns(distributorId: string): AgentRun[] {
     hitlReason: str(r.hitl_reason),
     latencyMs: r.latency_ms == null ? undefined : Number(r.latency_ms),
     costUsd: r.cost_usd == null ? undefined : Number(r.cost_usd),
-  }));
+    decision: str(r.decision) as AgentDecision | undefined,
+    decidedAt: str(r.decided_at),
+    decisionNote: str(r.decision_note),
+    appliedAllocations: json(r.applied_allocations),
+    appliedAt: str(r.applied_at),
+  };
 }

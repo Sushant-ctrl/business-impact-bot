@@ -112,7 +112,67 @@ test('supplier suggestions are sent once, only for completed runs', async () => 
   reply = { status: 200, body: { status: 'hitl_triggered', confidence: 0.7, output: PLAN_OUTPUT } };
   const held = await finish((done) => ao.startAllocationRun('distA', done));
   assert.equal(runById(held).status, 'hitl_triggered');
-  assert.throws(() => tx(() => ao.sendSourcingSuggestions('distA', held)), /Approve it in AgenticOrg/);
+  assert.throws(() => tx(() => ao.sendSourcingSuggestions('distA', held)), /waiting for approval/);
+});
+
+test('a held run is approved or rejected in RecoverRoute, and only an approved one can send suggestions', async () => {
+  reply = { status: 200, body: { status: 'hitl_triggered', confidence: 0.7, output: PLAN_OUTPUT } };
+  const a = await finish((done) => ao.startAllocationRun('distA', done));
+  const b = await finish((done) => ao.startAllocationRun('distA', done));
+
+  assert.throws(() => tx(() => ao.decideAgentRun('distA', a, { decision: 'maybe' })), /approved" or "rejected/);
+  assert.throws(() => tx(() => ao.decideAgentRun('distA', a, { decision: 'rejected' })), /Say why/);
+  assert.throws(() => tx(() => ao.decideAgentRun('distB', a, { decision: 'approved' })), /not found/, 'another distributor’s run');
+
+  tx(() => ao.decideAgentRun('distA', a, { decision: 'approved', note: '  Checked the stock  ' }));
+  const approved = runById(a);
+  assert.equal(approved.decision, 'approved');
+  assert.equal(approved.decisionNote, 'Checked the stock');
+  assert.ok(approved.decidedAt);
+  assert.throws(() => tx(() => ao.decideAgentRun('distA', a, { decision: 'rejected', note: 'no' })), /already approved/);
+  assert.equal(tx(() => ao.sendSourcingSuggestions('distA', a)), 1);
+
+  tx(() => ao.decideAgentRun('distA', b, { decision: 'rejected', note: 'Wrong supplier' }));
+  assert.throws(() => tx(() => ao.sendSourcingSuggestions('distA', b)), /rejected this run/);
+  assert.throws(() => tx(() => cmd.confirmAllocation('distA', { allocations: [{ orderId: '1046', qty: 1 }], agentRunId: b })), /rejected this agent plan/);
+
+  reply = { status: 200, body: { status: 'completed', confidence: 0.95, output: PLAN_OUTPUT } };
+  const done = await finish((d) => ao.startAllocationRun('distA', d));
+  assert.throws(() => tx(() => ao.decideAgentRun('distA', done, { decision: 'approved' })), /Only runs AgenticOrg held/);
+});
+
+test('confirming an allocation loaded from an agent plan records what the distributor changed', async () => {
+  reply = { status: 200, body: { status: 'hitl_triggered', confidence: 0.7, output: PLAN_OUTPUT } };
+  const id = await finish((done) => ao.startAllocationRun('distA', done));
+  // The agent proposed 12 for #1046; the distributor gives it 8 and #1048 the 10 detergent.
+  const allocations = [
+    { orderId: '1046', qty: 8 },
+    { orderId: '1047', qty: 0 },
+    { orderId: '1048', qty: 10 },
+  ];
+  tx(() => cmd.confirmAllocation('distA', { allocations, agentRunId: id }));
+  const run = runById(id);
+  assert.deepEqual(run.appliedAllocations, allocations);
+  assert.ok(run.appliedAt);
+  assert.equal(loadWorld().orders.find((o) => o.id === '1046')!.allocatedQty, 8);
+  assert.throws(() => tx(() => cmd.confirmAllocation('distA', { allocations: [], agentRunId: id })), /already applied/);
+  assert.throws(() => tx(() => cmd.confirmAllocation('distA', { allocations: [], agentRunId: '9999' })), /Agent plan not found/);
+});
+
+test('seed data includes a human-in-the-loop history', () => {
+  const a = loadAgentRuns('distA');
+  const b = loadAgentRuns('distB');
+  const current = a.find((r) => r.kind === 'allocation')!;
+  assert.equal(current.status, 'hitl_triggered');
+  assert.equal(current.decision, undefined, 'the plan on screen is waiting for a decision');
+  assert.equal(ao.suggestionsToSend(current.plan, loadWorld()).length, 3, 'its suggestions are valid against the seed');
+
+  const overridden = a.find((r) => r.appliedAt)!;
+  assert.equal(overridden.decision, 'approved');
+  assert.notDeepEqual(overridden.appliedAllocations, overridden.plan!.allocations);
+  assert.equal(b.find((r) => r.kind === 'disruption')!.decision, 'rejected');
+  assert.ok(b.find((r) => r.kind === 'disruption')!.decisionNote);
+  assert.equal(b.find((r) => r.kind === 'allocation')!.status, 'completed');
 });
 
 test('disruption run targets the Disruption Assistant and notifies on approval holds', async () => {

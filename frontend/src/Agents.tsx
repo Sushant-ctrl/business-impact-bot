@@ -5,7 +5,7 @@ import { daysBetween, findRetailer, findSupplier, fmt, isOpen, toMs } from '../.
 import type { AgentKind, AgentRun } from '../../shared/types.ts';
 import { usePortal } from './api.tsx';
 import { Markdown } from './Markdown.tsx';
-import { Badge } from './ui.tsx';
+import { Badge, Metric } from './ui.tsx';
 
 const STATUS: Record<AgentRun['status'], { label: string; tone: string }> = {
   running: { label: 'Running', tone: 'info' },
@@ -14,6 +14,26 @@ const STATUS: Record<AgentRun['status'], { label: string; tone: string }> = {
   failed: { label: 'Failed', tone: 'danger' },
   budget_exceeded: { label: 'Budget exceeded', tone: 'danger' },
 };
+
+/** The badge a run shows: the distributor's decision wins over the platform's status. */
+function runStatus(run: AgentRun) {
+  if (run.decision === 'approved') return { label: 'Approved by you', tone: 'success' };
+  if (run.decision === 'rejected') return { label: 'Rejected by you', tone: 'danger' };
+  return STATUS[run.status];
+}
+
+// Mirrors isApproved on the server.
+const isApproved = (run: AgentRun) => run.status === 'completed' || run.decision === 'approved';
+const awaitingDecision = (run: AgentRun) => run.status === 'hitl_triggered' && !run.decision;
+
+/** Where the distributor's confirmed allocation differs from what the agent proposed. */
+function overrides(run: AgentRun) {
+  if (!run.plan || !run.appliedAllocations) return [];
+  const applied = new Map(run.appliedAllocations.map((a) => [a.orderId, a.qty]));
+  return run.plan.allocations
+    .map((a) => ({ orderId: a.orderId, proposed: a.qty, confirmed: applied.get(a.orderId) ?? 0 }))
+    .filter((x) => x.proposed !== x.confirmed);
+}
 
 function useNow(active: boolean) {
   const [now, setNow] = useState(Date.now());
@@ -39,15 +59,84 @@ function NotConfigured() {
   );
 }
 
+/** Approve or reject a run AgenticOrg held for approval. A rejection needs a reason, which is kept on the run. */
+function DecisionControls({ run }: { run: AgentRun }) {
+  const { act } = usePortal();
+  const [note, setNote] = useState('');
+  const decide = async (decision: 'approved' | 'rejected') => {
+    const ok = await act('POST', `/agent-runs/${run.id}/decision`, { decision, note }, decision === 'approved' ? 'Run approved' : 'Run rejected');
+    if (ok) setNote('');
+  };
+  return (
+    <div className="form agent-decision">
+      <textarea
+        rows={2}
+        value={note}
+        maxLength={500}
+        placeholder="Note for the record (required to reject), e.g. what you checked or what the agent got wrong"
+        onChange={(e) => setNote(e.target.value)}
+      />
+      <div className="row-end">
+        <button className="btn" disabled={!note.trim()} title={note.trim() ? '' : 'Add a note saying why'} onClick={() => decide('rejected')}>
+          Reject
+        </button>
+        <button className="btn btn-primary" onClick={() => decide('approved')}>
+          Approve
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** What the distributor decided and did with the run: the audit trail for the human in the loop. */
+function HumanTrail({ run }: { run: AgentRun }) {
+  const { view } = usePortal();
+  const changed = overrides(run);
+  return (
+    <>
+      {run.decision && (
+        <p className="small">
+          <b>{run.decision === 'approved' ? '✓ Approved' : '✕ Rejected'}</b> by you · {fmt(run.decidedAt!)}
+          {run.decisionNote && <> · “{run.decisionNote}”</>}
+        </p>
+      )}
+      {run.appliedAt && (
+        <div className="small">
+          <b>Allocation confirmed</b> · {fmt(run.appliedAt)} ·{' '}
+          {changed.length === 0 ? (
+            'applied as the agent proposed'
+          ) : (
+            <>
+              you changed {changed.length} of {run.plan!.allocations.length} line{run.plan!.allocations.length === 1 ? '' : 's'}:
+              <ul className="agent-overrides">
+                {changed.map((x) => {
+                  const o = view.orders.find((o) => o.id === x.orderId);
+                  return (
+                    <li key={x.orderId}>
+                      #{x.orderId}
+                      {o && ` · ${findRetailer(view, o.retailerId).name}`}: agent {x.proposed} → you {x.confirmed}
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+      {run.sourcingSentAt && <p className="small">Supplier suggestions sent to retailers · {fmt(run.sourcingSentAt)}</p>}
+    </>
+  );
+}
+
 export function AgentRunCard({ run, collapsible = false }: { run: AgentRun; collapsible?: boolean }) {
   const { view } = usePortal();
   const now = useNow(run.status === 'running');
   const [open, setOpen] = useState(!collapsible);
-  const s = STATUS[run.status];
+  const s = runStatus(run);
   const name = view.agenticorg.agents[run.kind].name;
 
   return (
-    <div className={`agent-run agent-run-${run.status}`}>
+    <div className={`agent-run agent-run-${run.decision ?? run.status}`}>
       <div className="row-between">
         <div className="row">
           <Badge tone={s.tone}>{s.label}</Badge>
@@ -64,15 +153,17 @@ export function AgentRunCard({ run, collapsible = false }: { run: AgentRun; coll
         )}
       </div>
       {run.status === 'running' && <p className="muted small">Working on live RecoverRoute data… runs can take up to two minutes.</p>}
-      {run.status === 'hitl_triggered' && (
+      {awaitingDecision(run) && (
         <div className="callout callout-warning small">
-          AgenticOrg is holding this run for human approval{run.hitlReason ? ` (${run.hitlReason})` : ''}. You can load the plan as a draft;
-          supplier suggestions are sent only after approval.{' '}
+          AgenticOrg is holding this run for human approval{run.hitlReason ? ` (${run.hitlReason})` : ''}. Read the output, then approve or
+          reject it.{run.kind === 'allocation' && ' You can load the plan as a draft now; supplier suggestions are sent only after approval.'}{' '}
           <a href={`${view.agenticorg.dashboardUrl}/approvals`} target="_blank" rel="noreferrer">
-            Review it in AgenticOrg →
+            Also open in AgenticOrg →
           </a>
+          <DecisionControls run={run} />
         </div>
       )}
+      <HumanTrail run={run} />
       {run.error && <p className="text-danger small">{run.error}</p>}
       {open && run.output && <Markdown text={run.output} />}
       {open && run.platformRunId && <span className="muted small">AgenticOrg run {run.platformRunId}</span>}
@@ -84,15 +175,15 @@ const latest = (runs: AgentRun[], kind: AgentKind, orderId?: string) =>
   runs.find((r) => r.kind === kind && (orderId === undefined || r.orderId === orderId));
 
 /** Inventory & allocation tab: ask the allocation agent for a plan, load it into the table, send supplier suggestions. */
-export function AllocationAgentPanel({ onLoad, hasWork }: { onLoad: (allocations: Record<string, number>) => void; hasWork: boolean }) {
+export function AllocationAgentPanel({ onLoad, hasWork }: { onLoad: (runId: string, allocations: Record<string, number>) => void; hasWork: boolean }) {
   const { view, act } = usePortal();
   const run = latest(view.agentRuns, 'allocation');
   const busy = run?.status === 'running';
   const agent = view.agenticorg.agents.allocation;
   // A held run's allocations can still be loaded as a draft (the distributor confirms them in the table);
-  // sending supplier suggestions to retailers waits for AgenticOrg approval.
-  const plan = run?.status === 'completed' || run?.status === 'hitl_triggered' ? run.plan : undefined;
-  const approved = run?.status === 'completed';
+  // sending supplier suggestions to retailers waits for approval. A rejected plan can't be used.
+  const plan = (run?.status === 'completed' || run?.status === 'hitl_triggered') && run.decision !== 'rejected' ? run.plan : undefined;
+  const approved = run !== undefined && isApproved(run);
   // Mirrors suggestionsToSend on the server: one suggestion per open order, the agent's first pick.
   const pendingSourcing = (plan?.sourcing ?? []).filter(
     (s, i, all) => all.findIndex((x) => x.orderId === s.orderId) === i && view.orders.some((o) => o.id === s.orderId && isOpen(o)),
@@ -125,15 +216,19 @@ export function AllocationAgentPanel({ onLoad, hasWork }: { onLoad: (allocations
       {plan && (plan.allocations.length > 0 || pendingSourcing.length > 0) && (
         <div className="row-end">
           {plan.allocations.length > 0 && (
-            <button className="btn" onClick={() => onLoad(Object.fromEntries(plan.allocations.map((a) => [a.orderId, a.qty])))}>
-              Load {plan.allocations.length} allocation{plan.allocations.length === 1 ? '' : 's'} into the table
+            <button
+              className="btn"
+              disabled={Boolean(run!.appliedAt)}
+              onClick={() => onLoad(run!.id, Object.fromEntries(plan.allocations.map((a) => [a.orderId, a.qty])))}
+            >
+              {run!.appliedAt ? 'Plan applied' : `Load ${plan.allocations.length} allocation${plan.allocations.length === 1 ? '' : 's'} into the table`}
             </button>
           )}
           {pendingSourcing.length > 0 && (
             <button
               className="btn btn-primary"
               disabled={Boolean(run!.sourcingSentAt) || !approved}
-              title={!approved ? 'Approve this run in AgenticOrg first' : pendingSourcing.map((s) => `#${s.orderId} → ${findSupplier(view, s.supplierId).name} (${s.qty})`).join('\n')}
+              title={!approved ? 'Approve this run first' : pendingSourcing.map((s) => `#${s.orderId} → ${findSupplier(view, s.supplierId).name} (${s.qty})`).join('\n')}
               onClick={() => act('POST', `/agent-runs/${run!.id}/send-sourcing`, undefined, 'Supplier suggestions sent to retailers')}
             >
               {run!.sourcingSentAt
@@ -181,6 +276,10 @@ export function AgentsTab({ openOrder }: { openOrder: (id: string) => void }) {
   const runs = view.agentRuns;
   const done = runs.filter((r) => r.finishedAt);
   const avgSecs = done.length ? done.reduce((a, r) => a + daysBetween(r.createdAt, r.finishedAt!) * 86400, 0) / done.length : 0;
+  const held = runs.filter((r) => r.status === 'hitl_triggered');
+  const waiting = held.filter((r) => !r.decision).length;
+  const applied = runs.filter((r) => r.appliedAt);
+  const changed = applied.filter((r) => overrides(r).length > 0).length;
 
   return (
     <>
@@ -205,7 +304,7 @@ export function AgentsTab({ openOrder }: { openOrder: (id: string) => void }) {
                     : 'Writes a disruption card with impact, recovery actions and a retailer message. Trigger: every reported disruption.'}
                 </p>
                 <div className="small">
-                  {mine.length} run{mine.length === 1 ? '' : 's'} · {mine.filter((r) => r.status === 'hitl_triggered').length} awaiting approval
+                  {mine.length} run{mine.length === 1 ? '' : 's'} · {mine.filter(awaitingDecision).length} awaiting approval
                 </div>
                 <a className="small" href={`${ao.dashboardUrl}/agents/${ao.agents[k].id}`} target="_blank" rel="noreferrer">
                   Open in AgenticOrg →
@@ -213,6 +312,25 @@ export function AgentsTab({ openOrder }: { openOrder: (id: string) => void }) {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div>
+            <h3>Human in the loop</h3>
+            <p className="muted small">
+              Agents recommend; every decision that reaches a retailer or moves stock is made here. Runs below AgenticOrg's confidence
+              floor are held until you approve or reject them.
+            </p>
+          </div>
+        </div>
+        <div className="metrics">
+          <Metric label="Held for approval" value={held.length} hint={`of ${runs.length} run${runs.length === 1 ? '' : 's'}`} />
+          <Metric label="Awaiting your decision" value={waiting} tone={waiting > 0 ? 'warning' : undefined} />
+          <Metric label="Approved" value={held.filter((r) => r.decision === 'approved').length} />
+          <Metric label="Rejected" value={held.filter((r) => r.decision === 'rejected').length} hint="with your reason recorded" />
+          <Metric label="Plans changed before applying" value={`${changed}/${applied.length}`} hint="allocations you edited" />
         </div>
       </div>
 

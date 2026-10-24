@@ -136,6 +136,9 @@ export interface World {
 export type AgentKind = 'allocation' | 'disruption';
 export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'hitl_triggered' | 'budget_exceeded';
 
+/** The distributor's call on a run AgenticOrg held for approval. */
+export type AgentDecision = 'approved' | 'rejected';
+
 /** A structured plan the allocation agent returns alongside its write-up. Validated against live data on the server. */
 export interface AgentPlan {
   allocations: { orderId: string; qty: number }[];
@@ -161,6 +164,11 @@ export interface AgentRun {
   hitlReason?: string; // why AgenticOrg held the run, e.g. "confidence 0.700 < floor 0.9"
   latencyMs?: number;
   costUsd?: number;
+  decision?: AgentDecision; // recorded in RecoverRoute; the platform's own approval can't be read back
+  decidedAt?: string;
+  decisionNote?: string;
+  appliedAllocations?: AgentPlan['allocations']; // what the distributor confirmed after loading this plan
+  appliedAt?: string;
 }
 
 export interface AgenticOrgStatus {

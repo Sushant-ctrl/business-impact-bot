@@ -4,7 +4,8 @@
 // Runs execute in the background (they can take minutes) and are stored in agent_runs; portals update over SSE.
 // The agents only recommend: allocations are loaded into the distributor's allocation table for review, and supplier
 // suggestions are sent only when the distributor clicks. Runs the platform holds for approval come back as
-// `hitl_triggered` and are approved in the AgenticOrg UI.
+// `hitl_triggered`; the distributor approves or rejects them in RecoverRoute (our API key can't read the platform's
+// approvals back), and that decision, plus what was actually applied, is kept on the run as the audit trail.
 import {
   allocationPlan,
   days,
@@ -21,7 +22,7 @@ import {
   stockoutRisk,
 } from '../../shared/logic.ts';
 import { REASON_LABELS } from '../../shared/types.ts';
-import type { AgentKind, AgentPlan, AgentRunStatus, AgenticOrgStatus, Order, World } from '../../shared/types.ts';
+import type { AgentDecision, AgentKind, AgentPlan, AgentRunStatus, AgenticOrgStatus, Order, World } from '../../shared/types.ts';
 import { HttpError, suggestSupplier } from './commands.ts';
 import * as repo from './db.ts';
 
@@ -317,13 +318,31 @@ export function suggestionsToSend(plan: AgentPlan | undefined, w: World): AgentP
   });
 }
 
+/** Whether a person (or the platform's own policy) has cleared this run's recommendations to go to retailers. */
+export const isApproved = (r: { status: AgentRunStatus; decision?: AgentDecision }) =>
+  r.status === 'completed' || r.decision === 'approved';
+
+/** Records the distributor's approve/reject decision on a run AgenticOrg held for human approval. */
+export function decideAgentRun(distributorId: string, runId: string, body: { decision?: unknown; note?: unknown }) {
+  const r = repo.loadAgentRun(distributorId, runId);
+  if (!r) throw new HttpError(404, 'Agent run not found');
+  if (body.decision !== 'approved' && body.decision !== 'rejected') throw new HttpError(400, 'decision must be "approved" or "rejected".');
+  if (body.note != null && typeof body.note !== 'string') throw new HttpError(400, 'note must be text.');
+  const note = (body.note as string | undefined)?.trim() || undefined;
+  if (note && note.length > 500) throw new HttpError(400, 'note must be at most 500 characters.');
+  if (body.decision === 'rejected' && !note) throw new HttpError(400, 'Say why you are rejecting this run.');
+  if (r.status !== 'hitl_triggered') throw new HttpError(409, 'Only runs AgenticOrg held for approval need a decision.');
+  if (r.decision) throw new HttpError(409, `This run was already ${r.decision}.`);
+  repo.recordAgentDecision(runId, body.decision, nowIso(), note);
+}
+
 /** Sends the allocation agent's supplier recommendations to the retailers as suggestions (distributor-approved). */
 export function sendSourcingSuggestions(distributorId: string, runId: string): number {
-  const r = repo.loadAgentRuns(distributorId).find((x) => x.id === runId);
+  const r = repo.loadAgentRun(distributorId, runId);
   if (!r || r.kind !== 'allocation') throw new HttpError(404, 'Agent run not found');
   if (r.sourcingSentAt) throw new HttpError(409, 'These suggestions were already sent.');
-  if (r.status !== 'completed')
-    throw new HttpError(409, 'AgenticOrg is holding this run for approval. Approve it in AgenticOrg before sending suggestions to retailers.');
+  if (r.decision === 'rejected') throw new HttpError(409, 'You rejected this run, so its suggestions cannot be sent.');
+  if (!isApproved(r)) throw new HttpError(409, 'This run is waiting for approval. Approve it before sending suggestions to retailers.');
   const w = repo.loadWorld();
   const items = suggestionsToSend(r.plan, w);
   if (items.length === 0) throw new HttpError(409, 'This plan has no supplier suggestions for open orders.');

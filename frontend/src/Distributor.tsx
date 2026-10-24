@@ -335,18 +335,19 @@ function Allocation({ openOrder }: { openOrder: (id: string) => void }) {
   const recommended = () => Object.fromEntries(plan.map((l) => [l.order.id, String(l.suggested)]));
   const [edits, setEdits] = useState<Record<string, string>>(recommended);
   const [done, setDone] = useState(false);
-  const [fromAgent, setFromAgent] = useState(false);
+  // The agent run whose plan is loaded in the table; confirming records the distributor's final numbers on it.
+  const [agentRunId, setAgentRunId] = useState<string>();
   // When the plan changes (allocation confirmed, inventory moved elsewhere), start again from the recommendation.
   const planSig = JSON.stringify(plan.map((l) => [l.order.id, l.need, l.suggested]));
   const [seenSig, setSeenSig] = useState(planSig);
   if (seenSig !== planSig) {
     setSeenSig(planSig);
     setEdits(recommended());
-    setFromAgent(false);
+    setAgentRunId(undefined);
   }
-  const loadAgentPlan = (qty: Record<string, number>) => {
+  const loadAgentPlan = (runId: string, qty: Record<string, number>) => {
     setEdits(Object.fromEntries(plan.map((l) => [l.order.id, String(qty[l.order.id] ?? 0)])));
-    setFromAgent(true);
+    setAgentRunId(runId);
     setDone(false);
   };
 
@@ -369,7 +370,7 @@ function Allocation({ openOrder }: { openOrder: (id: string) => void }) {
     const ok = await act(
       'POST',
       '/allocations',
-      { allocations: plan.map((l) => ({ orderId: l.order.id, qty: qtyOf(l.order.id) })) },
+      { allocations: plan.map((l) => ({ orderId: l.order.id, qty: qtyOf(l.order.id) })), agentRunId },
       `${total} units allocated · retailers notified`,
     );
     if (ok) setDone(true);
@@ -404,7 +405,7 @@ function Allocation({ openOrder }: { openOrder: (id: string) => void }) {
               that order without exceeding what's in the warehouse.
             </p>
           </div>
-          {fromAgent ? <Badge tone="info">✦ Loaded from AgenticOrg plan · review, then confirm</Badge> : isManual && <Badge tone="warning">Manually adjusted</Badge>}
+          {agentRunId ? <Badge tone="info">✦ Loaded from AgenticOrg plan · review, then confirm</Badge> : isManual && <Badge tone="warning">Manually adjusted</Badge>}
         </div>
         {done && plan.length === 0 && <div className="callout callout-success">Allocation confirmed. All pending orders have stock.</div>}
         {done && plan.length > 0 && (
@@ -508,14 +509,14 @@ function Allocation({ openOrder }: { openOrder: (id: string) => void }) {
                 className="btn"
                 onClick={() => {
                   setEdits(recommended());
-                  setFromAgent(false);
+                  setAgentRunId(undefined);
                 }}
                 disabled={!isManual}
               >
                 Reset to recommendation
               </button>
               <button className="btn btn-primary" onClick={confirm} disabled={errors.length > 0 || total === 0}>
-                {fromAgent ? 'Approve AgenticOrg allocation' : isManual ? 'Confirm manual allocation' : 'Approve recommended allocation'} ({total} units)
+                {agentRunId ? 'Approve AgenticOrg allocation' : isManual ? 'Confirm manual allocation' : 'Approve recommended allocation'} ({total} units)
               </button>
             </div>
           </>

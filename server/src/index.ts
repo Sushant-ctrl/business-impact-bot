@@ -6,7 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, normalize } from 'node:path';
 import type { Role } from '../../shared/types.ts';
 import { aiStatus, assistantChat, parseDisruption, recoveryAdvice } from './ai.ts';
-import { agenticorgStatus, sendSourcingSuggestions, startAllocationRun, startDisruptionRun } from './agenticorg.ts';
+import { agenticorgStatus, decideAgentRun, sendSourcingSuggestions, startAllocationRun, startDisruptionRun } from './agenticorg.ts';
 import * as cmd from './commands.ts';
 import { HttpError } from './commands.ts';
 import { failInterruptedRuns, isEmpty, tx } from './db.ts';
@@ -82,6 +82,7 @@ function startRun(id: string, start: () => string) {
 }
 route('POST', `${D}/agent-runs/allocation`, (p) => startRun(p.id, () => startAllocationRun(p.id, broadcast)));
 route('POST', `${D}/orders/:orderId/agent-runs/disruption`, (p) => startRun(p.id, () => startDisruptionRun(p.id, p.orderId, broadcast)));
+route('POST', `${D}/agent-runs/:runId/decision`, (p, b) => mutate('distributor', p.id, () => decideAgentRun(p.id, p.runId, b)));
 route('POST', `${D}/agent-runs/:runId/send-sourcing`, (p) => mutate('distributor', p.id, () => sendSourcingSuggestions(p.id, p.runId)));
 
 // Retailer commands
