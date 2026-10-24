@@ -1,68 +1,93 @@
 # RecoverRoute · Delivery Disruption & Recovery
 
-Working prototype that helps distributors and retailers limit losses from delivery delays. There are two separate portals
-that share one live backend:
+RecoverRoute helps FMCG distributors and the kirana retailers they supply limit the losses from delivery delays. When a
+truck breaks down or a road closes, it shows which retailers will run out before the goods arrive, who should get the
+limited stock, and which other suppliers can deliver in time. Every costly decision stays with a person.
 
-- **Distributor portal** (`/distributor/:id`): orders with search and filters, disruption reporting (AI turns a plain-language
-  note into a structured report and a retailer message), ETA updates, inventory allocation ranked by retailer urgency,
-  warehouse restock and pricing, partial fulfilment, alternative-supplier suggestions, rejecting orders, a retailer-network
-  stock view, and responses to recovery requests.
-- **Retailer portal** (`/retailer/:id`): placing orders (with a distributor comparison and a suggested quantity), shelf stock
-  tracking (estimated from the last count minus daily sales; deliveries are added automatically), stockout risk, AI recovery
-  advice on delayed orders, alternative suppliers, partial-delivery offers, and cancellation or refund (simulated).
-- **Both portals**: a chat thread per order, live notifications, and an AI assistant that answers questions about the account's
-  live data.
+It has two portals on one live backend, plus two governed agents on the Pine Labs AgenticOrg platform.
 
-Changes made in one portal show up in the other immediately (Server-Sent Events). Payments and refunds are simulated.
-There is no login: pick an account on the landing page.
+## What's in it
 
-## Run
+**Distributor portal** (`/distributor/:id`)
+- Orders with search and filters ("Needs action", Delayed, COD, Prepaid) and an active-disruptions strip
+- Report a disruption in plain words; AI fills in the reason, revised ETA and a message to the retailer
+- Allocate scarce stock, most urgent retailer (fewest days of stock left) first, with manual overrides
+- Restock, reprice or start stocking products; reject orders; propose partial deliveries; suggest other suppliers
+- Retailer network view: every retailer's shelf stock and days of cover
+- Answer retailer requests (confirm an alternative supplier, acknowledge waiting or cancellation)
 
-Requires Node 24+ (the server runs TypeScript directly and uses the built-in `node:sqlite`; it has no runtime dependencies).
+**Retailer portal** (`/retailer/:id`)
+- Place orders, with both distributors compared on stock, price and delivery time, and a suggested quantity
+- Track shelf stock: estimated from your last count minus daily sales; deliveries are added automatically
+- Stockout risk on every open order
+- On a delayed order: AI recommendation ("What should I do?"), wait, cancel (and refund, simulated), or order from a
+  ranked alternative supplier; accept or decline partial deliveries
+- Cancel orders that haven't been dispatched yet
+
+**Both portals**: chat on each order, live notifications, a UPI QR code for paying an order, and an AI assistant that
+answers questions about your own live data. Changes appear in the other portal immediately.
+
+Payments and refunds are simulated. There is no login: pick an account on the landing page.
+
+## Run it
+
+Requires **Node 24+**. The server runs TypeScript directly and uses the built-in `node:sqlite`, so it has no runtime
+dependencies.
 
 ```sh
-cp server/.env.example server/.env      # add your OPENROUTER_API_KEY
+cp server/.env.example server/.env      # add OPENROUTER_API_KEY (optional)
 npm --prefix frontend install
 
 # development: two terminals
 npm run dev:server                      # API on http://localhost:8787
 npm run dev:web                         # app on http://localhost:5173 (proxies /api)
 
-# or a single process serving the built app
+# or one process serving the built app
 npm start                               # http://localhost:8787
+
+npm test                                # server flow tests
 ```
 
-Data is stored in `server/data/recoverroute.db` and seeded on first start. **Reset demo data** on the landing page reseeds
-it, with timestamps shifted so the scenario starts at the current hour.
+Data lives in `server/data/recoverroute.db` and is seeded on first start. **Reset demo data** on the landing page
+reseeds it, with timestamps shifted so the scenario starts at the current hour.
 
 ### AI (OpenRouter)
 
 Set `OPENROUTER_API_KEY` in `server/.env`. `OPENROUTER_MODEL` defaults to `anthropic/claude-sonnet-5.5`; any OpenRouter
-model id works. The key stays on the server. Without a key, or if a call fails, disruption drafting and recovery advice
-fall back to built-in rules, and the response says which source was used. The assistant chat needs the key.
+model ID works. The key stays on the server.
+
+Without a key, or if a call fails, disruption drafting and recovery advice fall back to built-in rules, and the UI says
+which source answered. The assistant chat needs the key.
 
 ## Demo scenario
 
-1. Open **Distributor A** and **Sharma General Store** side by side.
-2. Distributor → order #1042 → **Report disruption**. Type e.g. "landslide on Katraj ghat, truck reaches them Monday
-   evening" and click **✦ Draft report**, then send it.
-3. Retailer → #1042 now shows high stockout risk. Click **✦ Get a recommendation**, then request FreshLink (or whichever
-   supplier is recommended).
-4. Distributor → confirm the alternative. Both portals update, and the order is rerouted.
+1. Open **Distributor A** and **Sharma General Store** in two windows.
+2. Distributor → order #1042 → **Report disruption**. Type "landslide on Katraj ghat, truck reaches them Monday
+   evening", click **✦ Draft report**, then send it.
+3. Retailer → #1042 now shows high stockout risk (about 1.6 days of stock). Click **✦ Get a recommendation**, then
+   request the recommended supplier.
+4. Distributor → confirm the alternative. Both portals update and the order is rerouted.
 
-Also try allocating stock (Distributor → Inventory & allocation), placing an order and then reordering from **My stock**,
-order chat, and the assistant ("Brief me: what needs my attention today?").
+Then try **Inventory & allocation** (three orders compete for 12 cartons of cola), placing an order and reordering from
+**My stock**, the order chat, and the assistant ("Brief me: what needs my attention today?").
 
-## Code map
+## AgenticOrg agents
 
-- `shared/`: domain types and pure logic (stockout risk, supplier ranking, allocation plan), used by both the server and
-  the frontend
-- `server/src/db.ts`: SQLite schema and persistence · `seed.ts`: demo data
-- `server/src/commands.ts`: every state change, with validation, ownership checks, timeline events and notifications
-- `server/src/views.ts`: per-portal data scoping · `ai.ts`: OpenRouter features and their fallbacks · `index.ts`: HTTP
-  routes and SSE
-- `server/test/`: flow tests (`npm test`)
-- `frontend/src/`: `App.tsx` (routing, landing page, portal shell), `Distributor.tsx`, `Retailer.tsx`, `OrderDetail.tsx`,
-  `Assistant.tsx`, `api.tsx` (API client and live-updating portal state)
+Two agents on <https://agenticorg.hackathon.pinelabs.com> mirror the app's core jobs. Both are in shadow mode and need
+human approval for anything costly:
 
-`backend/` is an earlier, separate scaffold and is not used by the prototype.
+- **Delivery Disruption Assistant**: disruption cards, stockout risk, recovery options and retailer messages.
+- **Stock Allocation & Alternate Sourcing Agent** (Ananya Mehta): allocation by days of cover, supplier ranking,
+  partial fulfilment and draft purchase orders. It uses the same rules as `shared/logic.ts`.
+
+See [docs/agents.md](docs/agents.md) for their configuration, prompts and a verified test run.
+
+## Repository layout
+
+| Path | What |
+|---|---|
+| `frontend/` | React + Vite app: landing page and both portals |
+| `server/` | Node API: SQLite storage, commands, per-portal views, SSE, OpenRouter, tests |
+| `shared/` | Domain types and pure logic used by both |
+| `docs/` | [Architecture](docs/architecture.md), [API reference](docs/api.md), [AgenticOrg agents](docs/agents.md) |
+| `backend/` | Earlier Python (FastAPI) scaffold; not used by the prototype |
